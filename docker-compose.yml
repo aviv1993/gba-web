@@ -1,0 +1,11 @@
+services:
+  gba:
+    build: .
+    ports:
+      - "3004:3000"
+    volumes:
+      - saves_data:/app/saves
+    restart: unless-stopped
+
+volumes:
+  saves_data:
