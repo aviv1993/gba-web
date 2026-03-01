@@ -3,7 +3,7 @@ import { useRomLoader } from '../hooks/use-rom-loader.ts';
 import { useEmulatorContext } from '../emulator-context.tsx';
 
 export function RomLoader() {
-  const { loadRom } = useRomLoader();
+  const { loadRom, loadServerRom, serverRoms, checking } = useRomLoader();
   const { emulator, romLoaded } = useEmulatorContext();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
@@ -42,12 +42,43 @@ export function RomLoader() {
       onDrop={handleDrop}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
-      onClick={() => fileInputRef.current?.click()}
     >
       <div className="rom-loader-content">
-        <div className="rom-loader-icon">🎮</div>
-        <p>Drop a ROM file here or tap to browse</p>
-        <p className="rom-loader-hint">.gba, .gbc, .gb</p>
+        {checking ? (
+          <p>Loading...</p>
+        ) : serverRoms.length > 0 ? (
+          <>
+            <div className="rom-loader-icon">🎮</div>
+            <div className="rom-server-list">
+              {serverRoms.map(rom => (
+                <button
+                  key={rom.name}
+                  className="rom-server-btn"
+                  onClick={() => loadServerRom(rom.name)}
+                >
+                  {rom.name.replace(/\.(gba|gbc|gb)$/i, '')}
+                </button>
+              ))}
+            </div>
+            <p className="rom-loader-hint" style={{ marginTop: 12 }}>
+              or{' '}
+              <span className="rom-loader-link" onClick={() => fileInputRef.current?.click()}>
+                load a different ROM
+              </span>
+            </p>
+          </>
+        ) : (
+          <>
+            <div className="rom-loader-icon">🎮</div>
+            <p
+              onClick={() => fileInputRef.current?.click()}
+              style={{ cursor: 'pointer' }}
+            >
+              Drop a ROM file here or tap to browse
+            </p>
+            <p className="rom-loader-hint">.gba, .gbc, .gb</p>
+          </>
+        )}
       </div>
       <input
         ref={fileInputRef}

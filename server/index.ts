@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { savesRouter } from './saves.ts';
+import { romRouter } from './rom.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
@@ -14,8 +15,9 @@ app.use((_req, res, next) => {
   next();
 });
 
-// Save API
+// APIs
 app.use('/api/saves', savesRouter);
+app.use('/api/roms', romRouter);
 
 // Serve static frontend build
 const distPath = path.join(__dirname, '..', 'dist');
