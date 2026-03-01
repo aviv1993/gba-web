@@ -5,6 +5,7 @@ interface EmulatorState {
   emulator: mGBAEmulator | null;
   romLoaded: boolean;
   paused: boolean;
+  muted: boolean;
   speed: number;
   gameName: string | null;
 }
@@ -13,6 +14,7 @@ interface EmulatorContextValue extends EmulatorState {
   setEmulator: (emu: mGBAEmulator) => void;
   setRomLoaded: (name: string) => void;
   togglePause: () => void;
+  toggleMute: () => void;
   setSpeed: (speed: number) => void;
 }
 
@@ -23,6 +25,7 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
     emulator: null,
     romLoaded: false,
     paused: false,
+    muted: false,
     speed: 1,
     gameName: null,
   });
@@ -47,6 +50,15 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const toggleMute = useCallback(() => {
+    setState(s => {
+      if (!s.emulator) return s;
+      const newMuted = !s.muted;
+      s.emulator.setVolume(newMuted ? 0 : 1);
+      return { ...s, muted: newMuted };
+    });
+  }, []);
+
   const setSpeed = useCallback((speed: number) => {
     setState(s => {
       if (!s.emulator) return s;
@@ -56,7 +68,7 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <EmulatorContext.Provider value={{ ...state, setEmulator, setRomLoaded, togglePause, setSpeed }}>
+    <EmulatorContext.Provider value={{ ...state, setEmulator, setRomLoaded, togglePause, toggleMute, setSpeed }}>
       {children}
     </EmulatorContext.Provider>
   );

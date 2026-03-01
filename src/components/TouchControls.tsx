@@ -6,21 +6,22 @@ type GBAButton = 'Up' | 'Down' | 'Left' | 'Right' | 'A' | 'B' | 'L' | 'R' | 'Sta
 function Button({ name, label, className }: { name: GBAButton; label: string; className?: string }) {
   const { emulator } = useEmulatorContext();
 
-  const handleTouchStart = useCallback((e: React.TouchEvent) => {
-    e.preventDefault();
+  const press = useCallback(() => {
     emulator?.buttonPress(name);
   }, [emulator, name]);
 
-  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
-    e.preventDefault();
+  const release = useCallback(() => {
     emulator?.buttonUnpress(name);
   }, [emulator, name]);
 
   return (
     <button
       className={`touch-btn ${className ?? ''}`}
-      onTouchStart={handleTouchStart}
-      onTouchEnd={handleTouchEnd}
+      onTouchStart={(e) => { e.preventDefault(); press(); }}
+      onTouchEnd={(e) => { e.preventDefault(); release(); }}
+      onMouseDown={press}
+      onMouseUp={release}
+      onMouseLeave={release}
       onContextMenu={(e) => e.preventDefault()}
       style={{ touchAction: 'none' }}
     >

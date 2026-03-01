@@ -1,9 +1,10 @@
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 import { useEmulatorContext } from '../emulator-context.tsx';
 import { SaveSlots } from './SaveSlots.tsx';
 
 export function Toolbar() {
-  const { romLoaded, paused, speed, togglePause, setSpeed } = useEmulatorContext();
+  const { romLoaded, paused, muted, speed, togglePause, toggleMute, setSpeed } = useEmulatorContext();
+  const [showHelp, setShowHelp] = useState(false);
 
   const cycleSpeed = useCallback(() => {
     const speeds = [1, 2, 4];
@@ -26,6 +27,9 @@ export function Toolbar() {
       <button className="toolbar-btn" onClick={togglePause} title={paused ? 'Resume' : 'Pause'}>
         {paused ? '▶' : '⏸'}
       </button>
+      <button className="toolbar-btn" onClick={toggleMute} title={muted ? 'Unmute' : 'Mute'}>
+        {muted ? '🔇' : '🔊'}
+      </button>
       <button className="toolbar-btn" onClick={cycleSpeed} title={`Speed: ${speed}x`}>
         {speed}x
       </button>
@@ -33,6 +37,23 @@ export function Toolbar() {
       <button className="toolbar-btn" onClick={toggleFullscreen} title="Fullscreen">
         ⛶
       </button>
+      <div className="help-wrapper">
+        <button className="toolbar-btn" onClick={() => setShowHelp(!showHelp)} title="Controls">
+          ?
+        </button>
+        {showHelp && (
+          <div className="help-dropdown">
+            <div className="help-title">Keyboard Controls</div>
+            <div className="help-row"><kbd>Arrow Keys</kbd> D-pad</div>
+            <div className="help-row"><kbd>X</kbd> A button</div>
+            <div className="help-row"><kbd>Z</kbd> B button</div>
+            <div className="help-row"><kbd>A</kbd> L shoulder</div>
+            <div className="help-row"><kbd>S</kbd> R shoulder</div>
+            <div className="help-row"><kbd>Enter</kbd> Start</div>
+            <div className="help-row"><kbd>Backspace</kbd> Select</div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
