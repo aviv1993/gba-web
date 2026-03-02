@@ -330,7 +330,7 @@ html, body, #root {
   width: 36px;
   height: 36px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.35);
+  background: #1a1a2e;
   transition: transform 0.06s ease-out;
 }
 
@@ -446,16 +446,17 @@ html, body, #root {
 
   /* Darker, more visible buttons on touch */
   .touch-controls .touch-btn {
-    background: rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.75);
     border-color: rgba(255, 255, 255, 0.2);
+    color: #1a1a2e;
   }
 
   .touch-controls .touch-btn:active {
-    background: rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.9);
   }
 
   .joystick-zone {
-    background: rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.75);
     border-color: rgba(255, 255, 255, 0.2);
   }
 
@@ -547,13 +548,13 @@ html, body, #root {
 
   /* Darker overlay buttons for visibility */
   .touch-controls .touch-btn {
-    background: rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.75);
     border-color: rgba(255, 255, 255, 0.2);
-    color: rgba(255, 255, 255, 0.9);
+    color: #1a1a2e;
   }
 
   .touch-controls .touch-btn:active {
-    background: rgba(255, 255, 255, 0.55);
+    background: rgba(255, 255, 255, 0.9);
   }
 
   .shoulder-buttons {
@@ -583,7 +584,7 @@ html, body, #root {
 
   /* Darker joystick zone in overlay */
   .joystick-zone {
-    background: rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.75);
     border-color: rgba(255, 255, 255, 0.2);
   }
 
@@ -689,14 +690,14 @@ html, body, #root {
 
   :fullscreen .touch-controls .touch-btn,
   :-webkit-full-screen .touch-controls .touch-btn {
-    background: rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.75);
     border-color: rgba(255, 255, 255, 0.2);
-    color: rgba(255, 255, 255, 0.9);
+    color: #1a1a2e;
   }
 
   :fullscreen .joystick-zone,
   :-webkit-full-screen .joystick-zone {
-    background: rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.75);
     border-color: rgba(255, 255, 255, 0.2);
   }
 
@@ -712,4 +713,45 @@ html, body, #root {
     padding: 4px;
     gap: 3px;
   }
+}
+
+/* ===== Bot Controls ===== */
+.bot-controls {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 4px 12px;
+  background: var(--accent);
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
+  font-size: 13px;
+  z-index: 15;
+}
+
+.bot-status-text {
+  flex: 1;
+  text-align: center;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bot-stop-btn {
+  flex-shrink: 0;
+  font-size: 12px;
+  padding: 3px 10px;
+}
+
+.bot-controls[data-bot-status="DONE"] {
+  background: #1a5c2a;
+}
+
+.bot-controls[data-bot-status="ERROR"] {
+  background: #8b1a1a;
+}
+
+.bot-controls[data-bot-status="WAITING_FOR_DECISION"] {
+  background: #5c4a1a;
 }
