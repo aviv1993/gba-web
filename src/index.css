@@ -312,6 +312,28 @@ html, body, #root {
 .dpad-right { grid-column: 3; grid-row: 2; }
 .dpad-down  { grid-column: 2; grid-row: 3; }
 
+/* Joystick zone (mobile replacement for D-pad) */
+.joystick-zone {
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  touch-action: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.joystick-dot {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+  transition: transform 0.06s ease-out;
+}
+
 /* A/B buttons */
 .ab-buttons {
   position: relative;
@@ -421,6 +443,69 @@ html, body, #root {
   .touch-controls {
     flex: 1;
   }
+
+  /* Darker, more visible buttons on touch */
+  .touch-controls .touch-btn {
+    background: rgba(255, 255, 255, 0.4);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+
+  .touch-controls .touch-btn:active {
+    background: rgba(255, 255, 255, 0.55);
+  }
+
+  .joystick-zone {
+    background: rgba(255, 255, 255, 0.4);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+
+  /* Larger A/B buttons on touch */
+  .ab-buttons {
+    width: 150px;
+    height: 150px;
+  }
+
+  .touch-btn-a,
+  .touch-btn-b {
+    width: 68px;
+    height: 68px;
+    font-size: 20px;
+  }
+
+  /* Toolbar: vertical stack, bottom-left */
+  .toolbar {
+    position: fixed;
+    bottom: 8px;
+    left: 8px;
+    flex-direction: column;
+    background: rgba(22, 33, 62, 0.4);
+    border: none;
+    border-radius: 8px;
+    z-index: 15;
+    padding: 4px;
+    gap: 3px;
+    opacity: 0.5;
+  }
+
+  .toolbar:active, .toolbar:focus-within {
+    opacity: 1;
+  }
+
+  .toolbar-btn {
+    font-size: 13px;
+    padding: 5px 7px;
+  }
+
+  /* Dropdowns open to the right in vertical toolbar */
+  .save-slots-dropdown,
+  .help-dropdown {
+    bottom: auto;
+    left: 100%;
+    top: 0;
+    transform: none;
+    margin-bottom: 0;
+    margin-left: 6px;
+  }
 }
 
 /* ===== Mobile/tablet landscape — transparent overlay ===== */
@@ -460,15 +545,15 @@ html, body, #root {
     pointer-events: auto;
   }
 
-  /* Transparent buttons */
+  /* Darker overlay buttons for visibility */
   .touch-controls .touch-btn {
-    background: var(--overlay-btn);
-    border-color: rgba(255, 255, 255, 0.12);
-    color: rgba(255, 255, 255, 0.7);
+    background: rgba(255, 255, 255, 0.4);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.9);
   }
 
   .touch-controls .touch-btn:active {
-    background: var(--overlay-btn-active);
+    background: rgba(255, 255, 255, 0.55);
   }
 
   .shoulder-buttons {
@@ -483,23 +568,58 @@ html, body, #root {
     padding-bottom: 4px;
   }
 
-  /* Toolbar at bottom, compact */
+  /* Larger A/B buttons in landscape */
+  .ab-buttons {
+    width: 140px;
+    height: 140px;
+  }
+
+  .touch-btn-a,
+  .touch-btn-b {
+    width: 64px;
+    height: 64px;
+    font-size: 19px;
+  }
+
+  /* Darker joystick zone in overlay */
+  .joystick-zone {
+    background: rgba(255, 255, 255, 0.4);
+    border-color: rgba(255, 255, 255, 0.2);
+  }
+
+  /* Toolbar: vertical stack, bottom-left */
   .toolbar {
     position: absolute;
-    bottom: 0;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(22, 33, 62, 0.7);
+    bottom: 8px;
+    left: 8px;
+    flex-direction: column;
+    background: rgba(22, 33, 62, 0.4);
     border: none;
-    border-radius: 8px 8px 0 0;
+    border-radius: 8px;
     z-index: 10;
-    padding: 3px 8px;
-    gap: 4px;
+    padding: 4px;
+    gap: 3px;
+    opacity: 0.5;
+  }
+
+  .toolbar:active, .toolbar:focus-within {
+    opacity: 1;
   }
 
   .toolbar-btn {
     font-size: 13px;
-    padding: 3px 7px;
+    padding: 5px 7px;
+  }
+
+  /* Dropdowns open to the right in vertical toolbar */
+  .save-slots-dropdown,
+  .help-dropdown {
+    bottom: auto;
+    left: 100%;
+    top: 0;
+    transform: none;
+    margin-bottom: 0;
+    margin-left: 6px;
   }
 }
 
@@ -569,16 +689,27 @@ html, body, #root {
 
   :fullscreen .touch-controls .touch-btn,
   :-webkit-full-screen .touch-controls .touch-btn {
-    background: var(--overlay-btn);
-    border-color: rgba(255, 255, 255, 0.12);
-    color: rgba(255, 255, 255, 0.7);
+    background: rgba(255, 255, 255, 0.4);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: rgba(255, 255, 255, 0.9);
+  }
+
+  :fullscreen .joystick-zone,
+  :-webkit-full-screen .joystick-zone {
+    background: rgba(255, 255, 255, 0.4);
+    border-color: rgba(255, 255, 255, 0.2);
   }
 
   :fullscreen .toolbar,
   :-webkit-full-screen .toolbar {
     opacity: 1;
     position: absolute;
-    bottom: 0;
-    border-radius: 8px 8px 0 0;
+    bottom: 8px;
+    left: 8px;
+    transform: none;
+    flex-direction: column;
+    border-radius: 8px;
+    padding: 4px;
+    gap: 3px;
   }
 }

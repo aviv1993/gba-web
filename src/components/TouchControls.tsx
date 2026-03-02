@@ -1,5 +1,6 @@
-import { useCallback } from 'react';
+import { useCallback, useState, useEffect } from 'react';
 import { useEmulatorContext } from '../emulator-context.tsx';
+import { useVirtualDpad } from '../hooks/use-virtual-dpad.ts';
 
 type GBAButton = 'Up' | 'Down' | 'Left' | 'Right' | 'A' | 'B' | 'L' | 'R' | 'Start' | 'Select';
 
@@ -30,8 +31,49 @@ function Button({ name, label, className }: { name: GBAButton; label: string; cl
   );
 }
 
+function Dpad() {
+  return (
+    <div className="dpad">
+      <Button name="Up" label="▲" className="dpad-up" />
+      <Button name="Left" label="◀" className="dpad-left" />
+      <div className="dpad-center" />
+      <Button name="Right" label="▶" className="dpad-right" />
+      <Button name="Down" label="▼" className="dpad-down" />
+    </div>
+  );
+}
+
+function JoystickZone() {
+  const { zoneRef, activeDirections } = useVirtualDpad();
+
+  // Compute indicator dot offset based on active directions
+  const dx = (activeDirections.has('Right') ? 1 : 0) - (activeDirections.has('Left') ? 1 : 0);
+  const dy = (activeDirections.has('Down') ? 1 : 0) - (activeDirections.has('Up') ? 1 : 0);
+  const dotOffset = { x: dx * 24, y: dy * 24 };
+
+  return (
+    <div className="joystick-zone" ref={zoneRef}>
+      <div
+        className="joystick-dot"
+        style={{
+          transform: `translate(${dotOffset.x}px, ${dotOffset.y}px)`,
+        }}
+      />
+    </div>
+  );
+}
+
+function useIsTouchDevice() {
+  const [isTouch, setIsTouch] = useState(false);
+  useEffect(() => {
+    setIsTouch(window.matchMedia('(pointer: coarse)').matches);
+  }, []);
+  return isTouch;
+}
+
 export function TouchControls() {
   const { romLoaded } = useEmulatorContext();
+  const isTouch = useIsTouchDevice();
 
   if (!romLoaded) return null;
 
@@ -45,14 +87,7 @@ export function TouchControls() {
 
       {/* Main controls area */}
       <div className="main-controls">
-        {/* D-pad */}
-        <div className="dpad">
-          <Button name="Up" label="▲" className="dpad-up" />
-          <Button name="Left" label="◀" className="dpad-left" />
-          <div className="dpad-center" />
-          <Button name="Right" label="▶" className="dpad-right" />
-          <Button name="Down" label="▼" className="dpad-down" />
-        </div>
+        {isTouch ? <JoystickZone /> : <Dpad />}
 
         {/* A/B buttons */}
         <div className="ab-buttons">

@@ -4,10 +4,12 @@ import { RomLoader } from './components/RomLoader.tsx';
 import { TouchControls } from './components/TouchControls.tsx';
 import { Toolbar } from './components/Toolbar.tsx';
 import { useKeyboard } from './hooks/use-keyboard.ts';
+import { useTouchSpeed } from './hooks/use-touch-speed.ts';
 
 function EmulatorApp() {
   const { emulator, speed } = useEmulatorContext();
   useKeyboard(emulator, speed);
+  useTouchSpeed();
 
   return (
     <div className="app">
