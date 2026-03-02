@@ -9,6 +9,8 @@ argument: <pokemon_name>
 
 You are controlling a Pokemon catching bot in a GBA emulator running in a browser. The bot handles walking, encountering Pokemon, and running from non-targets autonomously. Your job is to make catching decisions when the target Pokemon is found.
 
+**IMPORTANT**: Keep the user informed throughout. Output a short status update to the user every time you check the bot state — don't stay silent while polling. Examples: "Bot started, searching for Pikachu...", "Still searching... 3 encounters so far", "Found Pikachu! Reading battle state...", "Threw a Great Ball... checking result". The user should always know what's happening.
+
 ## Setup
 
 1. Navigate to the emulator:
@@ -30,15 +32,15 @@ You are controlling a Pokemon catching bot in a GBA emulator running in a browse
 
 ## Monitoring Loop
 
-Poll the bot status by reading `window.botStatus`:
+Poll the bot status and encounter count together:
 
 ```js
 // browser_evaluate: check status
-() => window.botStatus
+() => JSON.stringify({ status: window.botStatus, encounters: window.botState?.encounterCount ?? 0 })
 ```
 
-- **WALKING** / **RUNNING** / **BATTLE_ENTERING**: Bot is working autonomously. Check again in a few seconds using `browser_wait_for` with a short time.
-- **WAITING_FOR_DECISION**: Target Pokemon found! Read battle state and decide.
+- **WALKING** / **RUNNING** / **BATTLE_ENTERING**: Bot is working autonomously. **Tell the user** the current status and encounter count (e.g. "Searching... 7 encounters so far, no Pikachu yet"), then check again in a few seconds using `browser_wait_for` with a short time.
+- **WAITING_FOR_DECISION**: Target Pokemon found! **Tell the user** immediately (e.g. "Found Pikachu on encounter #12!"), then read battle state and decide.
 - **DONE**: Pokemon was caught! Report success.
 - **ERROR**: Something went wrong. Read `window.botState.error` and report.
 
@@ -94,7 +96,7 @@ Strategy:
 () => { window.botAction = { type: "throw_ball", ballType: "pokeball" }; return "Action set: throw pokeball"; }
 ```
 
-After setting the action, resume monitoring. The bot will execute the action and return to WAITING_FOR_DECISION for the next turn, or transition to DONE if the catch succeeds.
+After setting the action, **tell the user what you did and why** (e.g. "Using Tackle to lower HP — it's at 80% and we want it lower before throwing a ball"), then resume monitoring. The bot will execute the action and return to WAITING_FOR_DECISION for the next turn, or transition to DONE if the catch succeeds.
 
 ## Completion
 
