@@ -51,6 +51,7 @@ export function Toolbar() {
             <div className="help-row"><kbd>S</kbd> R shoulder</div>
             <div className="help-row"><kbd>Enter</kbd> Start</div>
             <div className="help-row"><kbd>Backspace</kbd> Select</div>
+            <div className="help-row"><kbd>Space</kbd> Fast forward (hold)</div>
           </div>
         )}
       </div>

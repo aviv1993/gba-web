@@ -18,11 +18,16 @@ const KEY_MAP: Record<string, string> = {
   Backspace: 'Select',
 };
 
-export function useKeyboard(emulator: mGBAEmulator | null) {
+export function useKeyboard(emulator: mGBAEmulator | null, baseSpeed: number) {
   useEffect(() => {
     if (!emulator) return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === ' ') {
+        e.preventDefault();
+        if (!e.repeat) emulator.setFastForwardMultiplier(baseSpeed * 2);
+        return;
+      }
       const button = KEY_MAP[e.key];
       if (button) {
         e.preventDefault();
@@ -31,6 +36,11 @@ export function useKeyboard(emulator: mGBAEmulator | null) {
     };
 
     const handleKeyUp = (e: KeyboardEvent) => {
+      if (e.key === ' ') {
+        e.preventDefault();
+        emulator.setFastForwardMultiplier(baseSpeed);
+        return;
+      }
       const button = KEY_MAP[e.key];
       if (button) {
         e.preventDefault();
@@ -44,5 +54,5 @@ export function useKeyboard(emulator: mGBAEmulator | null) {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [emulator]);
+  }, [emulator, baseSpeed]);
 }

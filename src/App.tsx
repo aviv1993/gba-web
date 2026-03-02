@@ -6,8 +6,8 @@ import { Toolbar } from './components/Toolbar.tsx';
 import { useKeyboard } from './hooks/use-keyboard.ts';
 
 function EmulatorApp() {
-  const { emulator } = useEmulatorContext();
-  useKeyboard(emulator);
+  const { emulator, speed } = useEmulatorContext();
+  useKeyboard(emulator, speed);
 
   return (
     <div className="app">
