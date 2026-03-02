@@ -15,8 +15,8 @@ function EmulatorApp() {
         <Screen />
         <RomLoader />
       </div>
-      <Toolbar />
       <TouchControls />
+      <Toolbar />
     </div>
   );
 }

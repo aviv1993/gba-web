@@ -4,6 +4,7 @@ import type { mGBAEmulator } from './core/use-emulator.ts';
 interface EmulatorState {
   emulator: mGBAEmulator | null;
   romLoaded: boolean;
+  loading: boolean;
   paused: boolean;
   muted: boolean;
   speed: number;
@@ -12,6 +13,7 @@ interface EmulatorState {
 
 interface EmulatorContextValue extends EmulatorState {
   setEmulator: (emu: mGBAEmulator) => void;
+  setLoading: (loading: boolean) => void;
   setRomLoaded: (name: string) => void;
   togglePause: () => void;
   toggleMute: () => void;
@@ -24,6 +26,7 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<EmulatorState>({
     emulator: null,
     romLoaded: false,
+    loading: false,
     paused: false,
     muted: false,
     speed: 1,
@@ -34,8 +37,14 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
     setState(s => ({ ...s, emulator: emu }));
   }, []);
 
+  const setLoading = useCallback((loading: boolean) => {
+    setState(s => ({ ...s, loading }));
+  }, []);
+
   const setRomLoaded = useCallback((name: string) => {
-    setState(s => ({ ...s, romLoaded: true, gameName: name, paused: false }));
+    setState(s => ({ ...s, romLoaded: true, loading: false, gameName: name, paused: false }));
+    // Persist last ROM name for auto-resume
+    try { localStorage.setItem('gba-last-rom', name); } catch {}
   }, []);
 
   const togglePause = useCallback(() => {
@@ -68,7 +77,7 @@ export function EmulatorProvider({ children }: { children: ReactNode }) {
   }, []);
 
   return (
-    <EmulatorContext.Provider value={{ ...state, setEmulator, setRomLoaded, togglePause, toggleMute, setSpeed }}>
+    <EmulatorContext.Provider value={{ ...state, setEmulator, setLoading, setRomLoaded, togglePause, toggleMute, setSpeed }}>
       {children}
     </EmulatorContext.Provider>
   );

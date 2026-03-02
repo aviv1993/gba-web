@@ -12,11 +12,13 @@ export function Toolbar() {
     setSpeed(next);
   }, [speed, setSpeed]);
 
-  const toggleFullscreen = useCallback(() => {
+  const toggleFullscreen = useCallback(async () => {
     if (document.fullscreenElement) {
-      document.exitFullscreen();
+      await document.exitFullscreen();
+      try { screen.orientation.unlock(); } catch {}
     } else {
-      document.documentElement.requestFullscreen();
+      await document.documentElement.requestFullscreen();
+      try { await screen.orientation.lock('landscape'); } catch {}
     }
   }, []);
 

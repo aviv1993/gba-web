@@ -4,7 +4,7 @@ import { useEmulatorContext } from '../emulator-context.tsx';
 
 export function RomLoader() {
   const { loadRom, loadServerRom, serverRoms, checking } = useRomLoader();
-  const { emulator, romLoaded } = useEmulatorContext();
+  const { emulator, romLoaded, loading } = useEmulatorContext();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
 
@@ -30,11 +30,28 @@ export function RomLoader() {
     setDragging(false);
   }, []);
 
-  if (!emulator) {
-    return <div className="rom-loader">Initializing emulator...</div>;
+  if (!emulator || loading) {
+    return (
+      <div className="rom-loader">
+        <div className="rom-loader-content">
+          <div className="spinner" />
+          <p style={{ marginTop: 16 }}>{!emulator ? 'Initializing emulator...' : 'Loading ROM...'}</p>
+        </div>
+      </div>
+    );
   }
 
   if (romLoaded) return null;
+
+  if (checking) {
+    return (
+      <div className="rom-loader">
+        <div className="rom-loader-content">
+          <div className="spinner" />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -44,9 +61,7 @@ export function RomLoader() {
       onDragLeave={handleDragLeave}
     >
       <div className="rom-loader-content">
-        {checking ? (
-          <p>Loading...</p>
-        ) : serverRoms.length > 0 ? (
+        {serverRoms.length > 0 ? (
           <>
             <div className="rom-loader-icon">🎮</div>
             <div className="rom-server-list">
