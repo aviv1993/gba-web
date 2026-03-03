@@ -4,9 +4,10 @@ import { useSaves } from '../hooks/use-saves.ts';
 
 export function SaveSlots() {
   const { emulator, romLoaded, gameName } = useEmulatorContext();
-  const { saveToCloud, loadFromCloud, listCloudSaves, saveLocal, loadLocal } = useSaves(emulator, gameName);
+  const { saveToCloud, loadFromCloud, listCloudSaves } = useSaves(emulator, gameName);
   const [cloudSlots, setCloudSlots] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -24,20 +25,26 @@ export function SaveSlots() {
 
   const handleSave = useCallback(async (slot: number) => {
     setBusy(slot);
-    saveLocal(slot);
-    await saveToCloud(slot);
-    setCloudSlots(prev => ({ ...prev, [slot]: new Date().toISOString() }));
+    setError(null);
+    try {
+      await saveToCloud(slot);
+      setCloudSlots(prev => ({ ...prev, [slot]: new Date().toISOString() }));
+    } catch (err) {
+      setError(`Save failed: ${err instanceof Error ? err.message : err}`);
+    }
     setBusy(null);
-  }, [saveLocal, saveToCloud]);
+  }, [saveToCloud]);
 
   const handleLoad = useCallback(async (slot: number) => {
     setBusy(slot);
-    const loaded = loadLocal(slot) || await loadFromCloud(slot);
-    if (!loaded) {
-      console.log('No save in slot', slot);
+    setError(null);
+    try {
+      await loadFromCloud(slot);
+    } catch (err) {
+      setError(`Load failed: ${err instanceof Error ? err.message : err}`);
     }
     setBusy(null);
-  }, [loadLocal, loadFromCloud]);
+  }, [loadFromCloud]);
 
   if (!romLoaded) return null;
 
@@ -48,6 +55,7 @@ export function SaveSlots() {
       </button>
       {open && (
         <div className="save-slots-dropdown">
+          {error && <div className="save-slot-error">{error}</div>}
           {[1, 2, 3].map(slot => (
             <div key={slot} className="save-slot">
               <span className="save-slot-label">
