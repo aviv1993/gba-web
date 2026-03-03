@@ -77,10 +77,10 @@ const ADDR_BAG_BALLS_POCKET = ADDR_SAVE_BLOCK_1 + SB1_BAG_BALLS;
 const BAG_BALLS_POCKET_SIZE = BAG_BALLS_SIZE;
 
 // Item IDs for Pokeballs
-const ITEM_POKEBALL = 4;
-const ITEM_GREATBALL = 3;
-const ITEM_ULTRABALL = 2;
-const ITEM_MASTERBALL = 1;
+export const ITEM_POKEBALL = 4;
+export const ITEM_GREATBALL = 3;
+export const ITEM_ULTRABALL = 2;
+export const ITEM_MASTERBALL = 1;
 
 // gBattleOutcome
 const ADDR_BATTLE_OUTCOME = 0x02024D26;
@@ -258,6 +258,34 @@ export function readBattleState(mem: MemoryReader, skipBattleCheck = false): Bat
   if (!wild || !player) return null;
   const bag = readBag(mem);
   return { wild, player, bag };
+}
+
+/** Map ball type string to item ID. */
+export function ballTypeToItemId(ballType: string): number {
+  switch (ballType) {
+    case 'pokeball': return ITEM_POKEBALL;
+    case 'greatball': return ITEM_GREATBALL;
+    case 'ultraball': return ITEM_ULTRABALL;
+    case 'masterball': return ITEM_MASTERBALL;
+    default: return -1;
+  }
+}
+
+/**
+ * Find the 0-based display index of a ball type in the Balls pocket.
+ * Returns -1 if the ball type is not in the pocket.
+ */
+export function getBallSlotIndex(mem: MemoryReader, ballType: string): number {
+  const targetItemId = ballTypeToItemId(ballType);
+  if (targetItemId < 0) return -1;
+
+  for (let i = 0; i < BAG_BALLS_POCKET_SIZE; i++) {
+    const addr = ADDR_BAG_BALLS_POCKET + i * 4;
+    const itemId = mem.readU16(addr);
+    if (itemId === 0) break; // end of pocket
+    if (itemId === targetItemId) return i;
+  }
+  return -1;
 }
 
 /**

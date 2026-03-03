@@ -60,7 +60,7 @@ export interface BotState {
 
 export type BotAction =
   | { type: 'use_move'; moveIndex: number }
-  | { type: 'throw_ball'; ballType: 'pokeball' | 'greatball' | 'ultraball' | 'masterball' };
+  | { type: 'throw_ball'; ballType: 'pokeball' | 'greatball' | 'ultraball' };
 
 // --- Game State Model ---
 

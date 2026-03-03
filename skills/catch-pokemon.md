@@ -75,12 +75,18 @@ This returns:
 
 **Goal**: Catch the Pokemon without fainting it.
 
+**Never use Master Ball** — it is not available to the bot (blocked and hidden from bag state).
+
 Strategy:
-1. **If HP is high (>50%)**: Use a weak, non-super-effective move to lower HP. Avoid STAB moves and high-power moves.
-2. **If HP is moderate (25-50%)**: Consider throwing a ball. Great Balls are better than Poke Balls.
-3. **If HP is low (<25%)**: Throw the best available ball. Use Ultra Ball > Great Ball > Poke Ball.
-4. **If status is "none"**: Consider using a status move (Sleep Powder, Thunder Wave, etc.) if available — status conditions greatly increase catch rate.
-5. **If no balls left**: Report failure to the user.
+1. **Lower HP first**: Use weak moves (low power, non-STAB, non-super-effective) to bring HP down before throwing balls. Avoid overkill — don't use strong moves when HP is already low, or you'll faint the target.
+2. **Apply status conditions**: If the player has status moves that cause **sleep** (Sleep Powder, Spore, Hypnosis) or **paralysis** (Thunder Wave, Stun Spore, Glare), use them — they greatly increase catch rate. Growl, Leer, Tail Whip, Sand Attack etc. do NOT count as catch-rate-boosting status moves; don't waste turns on them.
+3. **Ball selection**: Weigh catch probability vs. ball cost vs. encounter rarity:
+   - For common Pokemon (Wurmple, Zigzagoon, Poochyena, etc.): Use **Poke Balls** even at moderate HP — they're cheap and common Pokemon are easy to re-encounter.
+   - For uncommon/rare Pokemon: Use **Great Balls** or **Ultra Balls** to avoid risking the encounter.
+   - Always prefer the cheapest ball that gives a reasonable catch chance given HP%, status, and species catch rate.
+4. **If HP is moderate (25-50%) with status**: Throw a ball — good catch odds.
+5. **If HP is low (<25%)**: Throw a ball. Poke Ball is fine for common species; Great/Ultra for rare ones.
+6. **If no balls left**: Report failure to the user.
 
 ### Injecting Actions
 
@@ -90,13 +96,15 @@ Strategy:
 () => { window.botAction = { type: "use_move", moveIndex: 0 }; return "Action set: use move 0"; }
 ```
 
-**Throw a ball**:
+**Throw a ball** (ballType must be one of: `pokeball`, `greatball`, `ultraball`):
 ```js
 // browser_evaluate: throw ball
 () => { window.botAction = { type: "throw_ball", ballType: "pokeball" }; return "Action set: throw pokeball"; }
 ```
 
 After setting the action, **tell the user what you did and why** (e.g. "Using Tackle to lower HP — it's at 80% and we want it lower before throwing a ball"), then resume monitoring. The bot will execute the action and return to WAITING_FOR_DECISION for the next turn, or transition to DONE if the catch succeeds.
+
+**If status goes from EXECUTING_ACTION → WALKING**: The wild Pokemon fainted (or the battle ended another way). Report this to the user and keep monitoring — the bot will resume searching automatically.
 
 ## Completion
 
