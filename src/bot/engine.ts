@@ -240,14 +240,20 @@ export function createBotEngine(emulator: Emulator) {
       setStatus('WAITING_FOR_DECISION');
     } else {
       setStatus('RUNNING');
-      executeRun();
+      await executeRun();
     }
   }
 
   async function executeRun() {
+    // Dismiss any remaining text — B advances text but won't select menu items
+    for (let i = 0; i < 3; i++) {
+      await pressButton('B');
+    }
+    // Wait for battle menu to be fully visible and interactive
+    await new Promise(r => setTimeout(r, 500));
+
     // Battle menu: FIGHT BAG / POKEMON RUN
-    // Cursor defaults to FIGHT (top-left). Navigate to RUN (bottom-right): Down, Right, A
-    // Note: text is already advanced by tickBattleEntering's A presses
+    // Down+Right reaches RUN from any cursor position (Gen 3 uses clamped navigation)
     await pressButton('Down');
     await pressButton('Right');
     await pressButton('A');
