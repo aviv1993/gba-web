@@ -3,219 +3,177 @@ import type { Emulator } from './types.ts';
 /**
  * GBA memory map constants.
  * EWRAM: 256KB at 0x02000000
- * IWRAM: 32KB at 0x03000000
  */
 const EWRAM_BASE = 0x02000000;
 const EWRAM_SIZE = 0x40000; // 256KB
-const IWRAM_BASE = 0x03000000;
-const IWRAM_SIZE = 0x8000; // 32KB
 
 /**
- * Memory reader that discovers GBA memory regions within the WASM heap.
+ * Offset of EWRAM within mGBA's decompressed save state data.
+ * Empirically discovered: state layout is header+CPU+IO+video (~0x21000 bytes),
+ * then EWRAM (0x40000), then IWRAM (0x8000). Total = 0x61000 = 397312 bytes.
+ */
+const EWRAM_STATE_OFFSET = 0x21000;
+
+/**
+ * Memory reader that reads GBA EWRAM from mGBA save state snapshots.
  *
- * Strategy: capture a save state, extract known EWRAM bytes, then search
- * Module.HEAPU8 for matching bytes to find the heap offset.
+ * On ARM (Apple Silicon), direct HEAPU8 reads are stale due to the weak
+ * memory model with SharedArrayBuffer — the emulator's pthread writes
+ * without Atomics, so the main thread sees cached values. Instead, we
+ * trigger a save state (which serialises the emulator's full state from
+ * its own thread), extract the EWRAM region, and cache it locally.
+ *
+ * Call refresh() before each batch of reads to get fresh data.
  */
 export class MemoryReader {
   private emulator: Emulator;
-  private ewramOffset: number | null = null;
-  private iwramOffset: number | null = null;
+  private ewramCache: Uint8Array | null = null;
   private initialized = false;
 
   constructor(emulator: Emulator) {
     this.emulator = emulator;
   }
 
-  /**
-   * Discover EWRAM/IWRAM locations within HEAPU8.
-   * Must be called after a ROM is loaded and running.
-   */
   async init(): Promise<boolean> {
     if (this.initialized) return true;
+    this.initialized = true;
+    console.log('[Bot Memory] Initialized, will read EWRAM from save states');
+    return true;
+  }
 
+  /**
+   * Take a fresh save state and cache the EWRAM region.
+   * Must be called before any read operations to get current data.
+   */
+  async refresh(): Promise<boolean> {
+    const SLOT = 9;
+    const ok = this.emulator.saveState(SLOT);
+    if (!ok) return false;
+
+    const paths = this.emulator.filePaths();
+    const gameName = this.emulator.gameName;
+    if (!gameName) return false;
+
+    const baseName = gameName.replace(/.*\//, '').replace(/\.[^.]+$/, '');
+    const stateFileName = `${paths.saveStatePath}/${baseName}.ss${SLOT}`;
+
+    let fileData: Uint8Array;
     try {
-      // Force a save state to get a snapshot of memory
-      this.emulator.forceAutoSaveState();
-
-      // Small delay for the state to be captured
-      await new Promise(r => setTimeout(r, 100));
-
-      const state = this.emulator.getAutoSaveState();
-      if (!state) {
-        console.error('[Bot Memory] Failed to get auto save state');
-        return false;
-      }
-
-      // Parse the save state to find EWRAM data
-      // mGBA save states contain EWRAM data — we look for it by searching
-      // for a known signature pattern
-      const found = this.discoverFromHeap(state.data);
-      if (found) {
-        this.initialized = true;
-        console.log(`[Bot Memory] EWRAM offset: 0x${this.ewramOffset!.toString(16)}`);
-        if (this.iwramOffset !== null) {
-          console.log(`[Bot Memory] IWRAM offset: 0x${this.iwramOffset!.toString(16)}`);
-        }
-      }
-      return found;
-    } catch (err) {
-      console.error('[Bot Memory] Init failed:', err);
-      return false;
-    }
-  }
-
-  private discoverFromHeap(saveStateData: Uint8Array): boolean {
-    const heap = this.emulator.HEAPU8;
-    if (!heap) {
-      console.error('[Bot Memory] HEAPU8 not available');
+      fileData = this.emulator.FS.readFile(stateFileName);
+    } catch {
       return false;
     }
 
-    // Extract a signature from the save state's EWRAM region.
-    // mGBA save states have a known structure — EWRAM is stored as a chunk.
-    // We'll grab a sequence of bytes from a known offset within EWRAM
-    // and search for it in the heap.
+    // Clean up the save state file
+    try { this.emulator.FS.unlink(stateFileName); } catch { /* ignore */ }
 
-    // Strategy: read bytes from a stable EWRAM location (game code section, not stack)
-    // and search HEAPU8 for that pattern.
-    // We use bytes from save state offset that corresponds to early EWRAM (game data area).
+    const stateData = await this.extractStateFromPng(fileData);
+    if (!stateData) return false;
 
-    // mGBA save state format: chunks with headers. EWRAM chunk is tagged.
-    // Rather than fully parsing the format, we use a search approach:
-    // 1. Pick a 32-byte sample from a well-populated EWRAM area
-    // 2. Search HEAPU8 for that exact sequence
-    // 3. Calculate the base offset from the match position
-
-    // The save state contains raw EWRAM data. We need to find where in the save state
-    // EWRAM starts. mGBA uses a chunked format with 8-byte headers (4-byte tag + 4-byte size).
-    // EWRAM tag is "ERAM" (0x4552414D)
-
-    const ewramTag = [0x45, 0x52, 0x41, 0x4D]; // "ERAM"
-    let ewramDataStart = -1;
-
-    for (let i = 0; i < saveStateData.length - 8; i++) {
-      if (saveStateData[i] === ewramTag[0] && saveStateData[i + 1] === ewramTag[1] &&
-          saveStateData[i + 2] === ewramTag[2] && saveStateData[i + 3] === ewramTag[3]) {
-        // Found ERAM tag — next 4 bytes are chunk size (little-endian), then data follows
-        const chunkSize = saveStateData[i + 4] | (saveStateData[i + 5] << 8) |
-          (saveStateData[i + 6] << 16) | (saveStateData[i + 7] << 24);
-        if (chunkSize >= EWRAM_SIZE) {
-          ewramDataStart = i + 8;
-          break;
-        }
-      }
-    }
-
-    if (ewramDataStart === -1) {
-      console.error('[Bot Memory] Could not find EWRAM chunk in save state');
+    // Extract EWRAM from the known offset
+    if (EWRAM_STATE_OFFSET + EWRAM_SIZE > stateData.length) {
+      console.error(`[Bot Memory] State data too small: ${stateData.length} bytes, need ${EWRAM_STATE_OFFSET + EWRAM_SIZE}`);
       return false;
     }
 
-    // Take a 32-byte sample from offset 0x100 within EWRAM (stable game data area)
-    const sampleOffset = 0x100;
-    const sampleLen = 32;
-    const sample = saveStateData.slice(ewramDataStart + sampleOffset, ewramDataStart + sampleOffset + sampleLen);
-
-    // Verify sample isn't all zeros
-    if (sample.every(b => b === 0)) {
-      // Try another offset
-      const altOffset = 0x1000;
-      const altSample = saveStateData.slice(ewramDataStart + altOffset, ewramDataStart + altOffset + sampleLen);
-      if (altSample.every(b => b === 0)) {
-        console.error('[Bot Memory] EWRAM appears empty, cannot create search pattern');
-        return false;
-      }
-      return this.searchHeapForPattern(heap, altSample, altOffset);
-    }
-
-    return this.searchHeapForPattern(heap, sample, sampleOffset);
+    this.ewramCache = stateData.slice(EWRAM_STATE_OFFSET, EWRAM_STATE_OFFSET + EWRAM_SIZE);
+    return true;
   }
 
-  private searchHeapForPattern(heap: Uint8Array, sample: Uint8Array, sampleEwramOffset: number): boolean {
-    // Search HEAPU8 for the sample pattern
-    const sampleLen = sample.length;
-
-    for (let i = 0; i < heap.length - EWRAM_SIZE; i++) {
-      let match = true;
-      for (let j = 0; j < sampleLen; j++) {
-        if (heap[i + j] !== sample[j]) {
-          match = false;
-          break;
-        }
-      }
-      if (match) {
-        // Found! Calculate EWRAM base offset in heap
-        this.ewramOffset = i - sampleEwramOffset;
-
-        // Verify by checking a few more bytes
-        const verifyOffset = 0x200;
-        if (this.ewramOffset + verifyOffset < heap.length) {
-          console.log('[Bot Memory] Pattern match found, EWRAM base offset:', this.ewramOffset);
-
-          // Try to find IWRAM too — it's typically near EWRAM in the heap
-          // IWRAM is 32KB, usually after EWRAM
-          this.findIwram(heap);
-          return true;
-        }
-      }
-    }
-
-    console.error('[Bot Memory] Could not find EWRAM pattern in HEAPU8');
-    return false;
-  }
-
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  private findIwram(heap: Uint8Array): void {
-    // IWRAM is typically allocated near EWRAM in the WASM heap.
-    // We'll look for it by using a save state IWRAM chunk.
-    // For now, skip IWRAM discovery — most game data we need is in EWRAM.
-    // Can be implemented later if needed.
-  }
-
-  /** Read an unsigned 8-bit value from a GBA address. */
   readU8(gbaAddr: number): number {
     const offset = this.resolveOffset(gbaAddr);
-    if (offset === null) return 0;
-    return this.emulator.HEAPU8[offset];
+    if (offset === null || !this.ewramCache) return 0;
+    return this.ewramCache[offset];
   }
 
-  /** Read an unsigned 16-bit value from a GBA address (little-endian). */
   readU16(gbaAddr: number): number {
     const offset = this.resolveOffset(gbaAddr);
-    if (offset === null) return 0;
-    const heap = this.emulator.HEAPU8;
-    return heap[offset] | (heap[offset + 1] << 8);
+    if (offset === null || !this.ewramCache) return 0;
+    return this.ewramCache[offset] | (this.ewramCache[offset + 1] << 8);
   }
 
-  /** Read an unsigned 32-bit value from a GBA address (little-endian). */
   readU32(gbaAddr: number): number {
     const offset = this.resolveOffset(gbaAddr);
-    if (offset === null) return 0;
-    const heap = this.emulator.HEAPU8;
-    return (heap[offset] | (heap[offset + 1] << 8) |
-      (heap[offset + 2] << 16) | (heap[offset + 3] << 24)) >>> 0;
+    if (offset === null || !this.ewramCache) return 0;
+    return (this.ewramCache[offset] | (this.ewramCache[offset + 1] << 8) |
+      (this.ewramCache[offset + 2] << 16) | (this.ewramCache[offset + 3] << 24)) >>> 0;
   }
 
-  /** Read a block of bytes from a GBA address. */
   readBytes(gbaAddr: number, length: number): Uint8Array {
     const offset = this.resolveOffset(gbaAddr);
-    if (offset === null) return new Uint8Array(length);
-    return this.emulator.HEAPU8.slice(offset, offset + length);
+    if (offset === null || !this.ewramCache) return new Uint8Array(length);
+    return this.ewramCache.slice(offset, offset + length);
   }
 
   private resolveOffset(gbaAddr: number): number | null {
     if (gbaAddr >= EWRAM_BASE && gbaAddr < EWRAM_BASE + EWRAM_SIZE) {
-      if (this.ewramOffset === null) return null;
-      return this.ewramOffset + (gbaAddr - EWRAM_BASE);
-    }
-    if (gbaAddr >= IWRAM_BASE && gbaAddr < IWRAM_BASE + IWRAM_SIZE) {
-      if (this.iwramOffset === null) return null;
-      return this.iwramOffset + (gbaAddr - IWRAM_BASE);
+      return gbaAddr - EWRAM_BASE;
     }
     return null;
   }
 
   get isInitialized(): boolean {
     return this.initialized;
+  }
+
+  get hasCache(): boolean {
+    return this.ewramCache !== null;
+  }
+
+  /**
+   * Parse PNG chunks to find the `gbAs` chunk containing the main save state.
+   * The chunk data is zlib-compressed; decompress it.
+   */
+  private async extractStateFromPng(pngData: Uint8Array): Promise<Uint8Array | null> {
+    const PNG_MAGIC = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+    for (let i = 0; i < PNG_MAGIC.length; i++) {
+      if (pngData[i] !== PNG_MAGIC[i]) {
+        return pngData;
+      }
+    }
+
+    let offset = 8;
+    while (offset < pngData.length - 8) {
+      const chunkLen = (pngData[offset] << 24) | (pngData[offset + 1] << 16) |
+        (pngData[offset + 2] << 8) | pngData[offset + 3];
+      const chunkType = String.fromCharCode(
+        pngData[offset + 4], pngData[offset + 5],
+        pngData[offset + 6], pngData[offset + 7],
+      );
+
+      if (chunkType === 'gbAs') {
+        const compressedData = pngData.slice(offset + 8, offset + 8 + chunkLen);
+        return this.zlibDecompress(compressedData);
+      }
+
+      offset += 12 + chunkLen;
+    }
+
+    console.error('[Bot Memory] No gbAs chunk found in PNG');
+    return null;
+  }
+
+  private async zlibDecompress(data: Uint8Array): Promise<Uint8Array> {
+    const ds = new DecompressionStream('deflate');
+    const writer = ds.writable.getWriter();
+    writer.write(data);
+    writer.close();
+
+    const reader = ds.readable.getReader();
+    const chunks: Uint8Array[] = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+
+    const totalLen = chunks.reduce((sum, c) => sum + c.length, 0);
+    const result = new Uint8Array(totalLen);
+    let pos = 0;
+    for (const chunk of chunks) {
+      result.set(chunk, pos);
+      pos += chunk.length;
+    }
+    return result;
   }
 }

@@ -3,27 +3,21 @@ import type { BagState, BattleState, MoveSlot, PlayerPokemon, WildPokemon } from
 import { getSpeciesName, internalToNational } from './pokemon-db.ts';
 
 /**
- * Pokemon Ruby/Sapphire (US) memory addresses.
+ * Pokemon Ruby/Sapphire memory addresses.
+ * Source: pret/pokeruby symbol map (https://github.com/pret/pokeruby/tree/symbols)
  *
- * These are well-documented in the ROM hacking community.
- * All addresses are in the EWRAM region (0x0200xxxx).
+ * These addresses are from the decompilation project and apply to
+ * both US and EU versions of Ruby/Sapphire.
  */
 
-// Battle state flag — nonzero when in a battle
-// This is a commonly used callback/flag address in the battle engine
-const ADDR_BATTLE_FLAGS = 0x02022B4C;
+// gBattleMons — array of BattlePokemon structs (58h bytes each)
+// Index 0 = player's active Pokemon, Index 1 = enemy/wild Pokemon
+const ADDR_BATTLE_MONS = 0x02024A80;
+const BATTLE_MON_SIZE = 0x58; // sizeof(struct BattlePokemon)
 
-// Wild/enemy Pokemon battle data (first enemy slot)
-// In Gen 3, battle Pokemon structs are 100 bytes each.
-// The enemy party starts at a known battle struct base.
-const ADDR_ENEMY_BATTLE_POKEMON = 0x0202402C;
-
-// Player battle Pokemon (first slot)
-const ADDR_PLAYER_BATTLE_POKEMON = 0x02024084;
-
-// Battle struct offsets (within each 100-byte battle Pokemon struct)
+// BattlePokemon struct offsets (from pret/pokeruby include/pokemon.h)
 const BATTLE_MON_SPECIES = 0x00;       // u16 — internal species ID
-// Stats at 0x02-0x0A (attack, defense, speed, sp.atk, sp.def) — reserved for future use
+// Stats at 0x02-0x0A (attack, defense, speed, sp.atk, sp.def)
 const BATTLE_MON_MOVE1 = 0x0C;         // u16
 const BATTLE_MON_MOVE2 = 0x0E;         // u16
 const BATTLE_MON_MOVE3 = 0x10;         // u16
@@ -32,15 +26,17 @@ const BATTLE_MON_PP1 = 0x24;           // u8
 const BATTLE_MON_PP2 = 0x25;           // u8
 const BATTLE_MON_PP3 = 0x26;           // u8
 const BATTLE_MON_PP4 = 0x27;           // u8
-const BATTLE_MON_STATUS = 0x28;        // u32 — status condition flags
-const BATTLE_MON_HP = 0x2C;            // u16
-const BATTLE_MON_MAX_HP = 0x2E;        // u16
+const BATTLE_MON_HP = 0x28;            // u16
 const BATTLE_MON_LEVEL = 0x2A;         // u8
+const BATTLE_MON_MAX_HP = 0x2C;        // u16
+const BATTLE_MON_STATUS = 0x4C;        // u32 — status1 condition flags
 
-// Bag item data — items are stored in different pockets
-// Pokeballs are in the "Balls" pocket
+// Bag: Poke Balls pocket is within gSaveBlock1 (at 0x02023A60)
+// Balls pocket offset within SaveBlock1 = 0x600
 // Item entries are 4 bytes: item_id (u16) + quantity (u16)
-const ADDR_BAG_BALLS_POCKET = 0x02038C0C; // balls pocket start
+const ADDR_SAVE_BLOCK_1 = 0x02023A60;
+const BAG_BALLS_POCKET_OFFSET = 0x600;
+const ADDR_BAG_BALLS_POCKET = ADDR_SAVE_BLOCK_1 + BAG_BALLS_POCKET_OFFSET;
 const BAG_BALLS_POCKET_SIZE = 16;          // max slots in balls pocket
 
 // Item IDs for Pokeballs
@@ -49,12 +45,8 @@ const ITEM_GREATBALL = 3;
 const ITEM_ULTRABALL = 2;
 const ITEM_MASTERBALL = 1;
 
-// Callback/battle state addresses for detecting battle phase
-// gBattleMainFunc — pointer to current battle main function
-const ADDR_BATTLE_MAIN_FUNC = 0x02024018;
-
-// Address that indicates battle outcome
-const ADDR_BATTLE_OUTCOME = 0x02024220;
+// gBattleOutcome
+const ADDR_BATTLE_OUTCOME = 0x02024D26;
 
 // Battle outcome values
 export const BATTLE_OUTCOME_WON = 1;
@@ -82,17 +74,54 @@ function decodeStatus(statusBits: number): string {
   return 'unknown';
 }
 
-/** Check if currently in a battle. */
+/** Max valid internal species ID in Gen 3. */
+const MAX_SPECIES_ID = 440;
+
+/**
+ * Check if currently in a battle by validating gBattleMons structs.
+ * Uses species-based detection (both player and enemy must have valid species)
+ * instead of gBattleTypeFlags, which is at a different address in EU ROMs.
+ */
 export function isInBattle(mem: MemoryReader): boolean {
-  const flags = mem.readU32(ADDR_BATTLE_FLAGS);
-  return flags !== 0;
+  // Validate player battle mon
+  const playerBase = ADDR_BATTLE_MONS;
+  const playerSpecies = mem.readU16(playerBase + BATTLE_MON_SPECIES);
+  if (playerSpecies === 0 || playerSpecies > MAX_SPECIES_ID) return false;
+  const playerMaxHp = mem.readU16(playerBase + BATTLE_MON_MAX_HP);
+  if (playerMaxHp < 5 || playerMaxHp > 999) return false;
+
+  // Validate enemy battle mon
+  const enemyBase = ADDR_BATTLE_MONS + BATTLE_MON_SIZE;
+  const enemySpecies = mem.readU16(enemyBase + BATTLE_MON_SPECIES);
+  if (enemySpecies === 0 || enemySpecies > MAX_SPECIES_ID) return false;
+  const enemyMaxHp = mem.readU16(enemyBase + BATTLE_MON_MAX_HP);
+  if (enemyMaxHp < 5 || enemyMaxHp > 999) return false;
+
+  // Both need valid levels
+  const playerLevel = mem.readU8(playerBase + BATTLE_MON_LEVEL);
+  if (playerLevel < 1 || playerLevel > 100) return false;
+  const enemyLevel = mem.readU8(enemyBase + BATTLE_MON_LEVEL);
+  if (enemyLevel < 1 || enemyLevel > 100) return false;
+
+  return true;
 }
 
-/** Check if the battle animation/transition is still playing. */
-export function isBattleReady(mem: MemoryReader): boolean {
-  // Battle is ready when the main func pointer is set and script is active
-  const mainFunc = mem.readU32(ADDR_BATTLE_MAIN_FUNC);
-  return mainFunc !== 0 && isInBattle(mem);
+/**
+ * Return a fingerprint of the current gBattleMons data.
+ * Used to detect when a NEW battle starts — gBattleMons persists in EWRAM
+ * after battles end (game doesn't zero it), so we compare fingerprints
+ * rather than just checking if data is present.
+ */
+export function getBattleFingerprint(mem: MemoryReader): string {
+  const enemyBase = ADDR_BATTLE_MONS + BATTLE_MON_SIZE;
+  const species = mem.readU16(enemyBase + BATTLE_MON_SPECIES);
+  const level = mem.readU8(enemyBase + BATTLE_MON_LEVEL);
+  const hp = mem.readU16(enemyBase + BATTLE_MON_HP);
+  const maxHp = mem.readU16(enemyBase + BATTLE_MON_MAX_HP);
+  const move1 = mem.readU16(enemyBase + BATTLE_MON_MOVE1);
+  // Include player HP too (changes between encounters)
+  const playerHp = mem.readU16(ADDR_BATTLE_MONS + BATTLE_MON_HP);
+  return `${species}:${level}:${hp}:${maxHp}:${move1}:${playerHp}`;
 }
 
 /** Get the battle outcome (0 = ongoing). */
@@ -101,12 +130,18 @@ export function getBattleOutcome(mem: MemoryReader): number {
 }
 
 /** Read wild/enemy Pokemon battle data. */
-export function readWildPokemon(mem: MemoryReader): WildPokemon | null {
-  if (!isInBattle(mem)) return null;
+export function readWildPokemon(mem: MemoryReader, skipBattleCheck = false): WildPokemon | null {
+  if (!skipBattleCheck && !isInBattle(mem)) return null;
 
-  const base = ADDR_ENEMY_BATTLE_POKEMON;
+  const base = ADDR_BATTLE_MONS + BATTLE_MON_SIZE; // index 1 = enemy
   const internalSpecies = mem.readU16(base + BATTLE_MON_SPECIES);
-  if (internalSpecies === 0) return null;
+  if (internalSpecies === 0 || internalSpecies > MAX_SPECIES_ID) return null;
+
+  const level = mem.readU8(base + BATTLE_MON_LEVEL);
+  if (level === 0 || level > 100) return null;
+
+  const maxHp = mem.readU16(base + BATTLE_MON_MAX_HP);
+  if (maxHp === 0 || maxHp > 999) return null;
 
   const nationalId = internalToNational(internalSpecies);
   const name = getSpeciesName(nationalId) ?? `#${nationalId}`;
@@ -114,18 +149,18 @@ export function readWildPokemon(mem: MemoryReader): WildPokemon | null {
   return {
     species: nationalId,
     name,
-    level: mem.readU8(base + BATTLE_MON_LEVEL),
+    level,
     hp: mem.readU16(base + BATTLE_MON_HP),
-    maxHp: mem.readU16(base + BATTLE_MON_MAX_HP),
+    maxHp,
     status: decodeStatus(mem.readU32(base + BATTLE_MON_STATUS)),
   };
 }
 
 /** Read player's active Pokemon battle data. */
-export function readPlayerPokemon(mem: MemoryReader): PlayerPokemon | null {
-  if (!isInBattle(mem)) return null;
+export function readPlayerPokemon(mem: MemoryReader, skipBattleCheck = false): PlayerPokemon | null {
+  if (!skipBattleCheck && !isInBattle(mem)) return null;
 
-  const base = ADDR_PLAYER_BATTLE_POKEMON;
+  const base = ADDR_BATTLE_MONS; // index 0 = player
   const internalSpecies = mem.readU16(base + BATTLE_MON_SPECIES);
   if (internalSpecies === 0) return null;
 
@@ -180,9 +215,9 @@ export function readBag(mem: MemoryReader): BagState {
 }
 
 /** Read full battle state. */
-export function readBattleState(mem: MemoryReader): BattleState | null {
-  const wild = readWildPokemon(mem);
-  const player = readPlayerPokemon(mem);
+export function readBattleState(mem: MemoryReader, skipBattleCheck = false): BattleState | null {
+  const wild = readWildPokemon(mem, skipBattleCheck);
+  const player = readPlayerPokemon(mem, skipBattleCheck);
   if (!wild || !player) return null;
   const bag = readBag(mem);
   return { wild, player, bag };

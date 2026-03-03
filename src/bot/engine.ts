@@ -2,12 +2,11 @@ import type { BotAction, BotState, BotStatus, Emulator } from './types.ts';
 import { MemoryReader } from './memory.ts';
 import { getSpeciesId } from './pokemon-db.ts';
 import {
-  isInBattle,
   readBattleState,
   readWildPokemon,
   getBattleOutcome,
+  getBattleFingerprint,
   BATTLE_OUTCOME_CAUGHT,
-  BATTLE_OUTCOME_RAN,
 } from './game-data.ts';
 
 /** Button press duration in ms */
@@ -16,12 +15,18 @@ const PRESS_DURATION = 80;
 const PRESS_GAP = 100;
 /** Tick interval in ms */
 const TICK_INTERVAL = 100;
-/** Frames to wait for battle transition */
+/** Ticks to wait for battle transition */
 const BATTLE_ENTER_WAIT = 60;
-/** Frames to wait after running */
+/** Max ticks to wait for battle data before assuming false positive */
+const BATTLE_ENTER_MAX_RETRIES = 5;
+/** Ticks to wait after running (press A through text) */
 const RUN_WAIT = 40;
+/** Extra ticks to press through post-run text */
+const POST_RUN_DISMISS = 20;
 /** Frames to wait after executing an action */
 const ACTION_WAIT = 60;
+/** How often to refresh memory during walking (every N ticks) */
+const WALK_REFRESH_INTERVAL = 10;
 
 export function createBotEngine(emulator: Emulator) {
   const memory = new MemoryReader(emulator);
@@ -33,14 +38,18 @@ export function createBotEngine(emulator: Emulator) {
   let error: string | null = null;
   let pendingAction: BotAction | null = null;
   let tickTimer: ReturnType<typeof setInterval> | null = null;
+  let tickInProgress = false;
   let waitCounter = 0;
   let walkDirection: 'Up' | 'Down' = 'Up';
   let walkStep = 0;
   let previousSpeed = 1;
+  let battleEnterRetries = 0;
+  /** Fingerprint of the last battle's gBattleMons data, used to detect NEW battles. */
+  let lastBattleFingerprint: string | null = null;
 
   function getState(): BotState {
     const battleState = (status === 'WAITING_FOR_DECISION' || status === 'EXECUTING_ACTION')
-      ? readBattleState(memory)
+      ? readBattleState(memory, true)
       : null;
     return {
       status,
@@ -61,7 +70,6 @@ export function createBotEngine(emulator: Emulator) {
     const w = window as Window & Record<string, unknown>;
     w.botStatus = state.status;
     w.botState = state;
-    // Dispatch custom event for React to pick up
     window.dispatchEvent(new CustomEvent('bot-state-change', { detail: state }));
   }
 
@@ -89,14 +97,18 @@ export function createBotEngine(emulator: Emulator) {
     encounterCount = 0;
     error = null;
     pendingAction = null;
+    lastBattleFingerprint = null;
 
-    // Initialize memory reader
     const ok = await memory.init();
     if (!ok) {
       error = 'Failed to initialize memory reader. Make sure a ROM is loaded and running.';
       setStatus('ERROR');
       return;
     }
+
+    // Take initial snapshot so we can detect changes (stale battle data from previous encounters)
+    await memory.refresh();
+    lastBattleFingerprint = getBattleFingerprint(memory);
 
     // Save current speed and enable fast forward
     previousSpeed = emulator.getFastForwardMultiplier();
@@ -111,7 +123,6 @@ export function createBotEngine(emulator: Emulator) {
       clearInterval(tickTimer);
       tickTimer = null;
     }
-    // Restore speed
     emulator.setFastForwardMultiplier(previousSpeed);
     if (status !== 'DONE' && status !== 'ERROR') {
       setStatus('IDLE');
@@ -134,23 +145,27 @@ export function createBotEngine(emulator: Emulator) {
     w.botAction = undefined;
   }
 
-  function tick() {
+  async function tick() {
+    // Re-entry guard: save state + decompress is async, prevent overlapping ticks
+    if (tickInProgress) return;
+    tickInProgress = true;
+
     try {
       switch (status) {
         case 'WALKING':
-          tickWalking();
+          await tickWalking();
           break;
         case 'BATTLE_ENTERING':
-          tickBattleEntering();
+          await tickBattleEntering();
           break;
         case 'RUNNING':
-          tickRunning();
+          await tickRunning();
           break;
         case 'WAITING_FOR_DECISION':
-          tickWaitingForDecision();
+          await tickWaitingForDecision();
           break;
         case 'EXECUTING_ACTION':
-          tickExecutingAction();
+          await tickExecutingAction();
           break;
       }
     } catch (err) {
@@ -158,37 +173,61 @@ export function createBotEngine(emulator: Emulator) {
       error = err instanceof Error ? err.message : String(err);
       setStatus('ERROR');
       stop();
+    } finally {
+      tickInProgress = false;
     }
   }
 
-  function tickWalking() {
-    // Check if we stumbled into a battle
-    if (isInBattle(memory)) {
-      // Disable fast forward for battle
-      emulator.setFastForwardMultiplier(1);
-      waitCounter = BATTLE_ENTER_WAIT;
-      setStatus('BATTLE_ENTERING');
-      return;
+  async function tickWalking() {
+    // Periodically refresh memory to detect battle entry
+    walkStep++;
+    if (walkStep % WALK_REFRESH_INTERVAL === 0) {
+      await memory.refresh();
+      const fp = getBattleFingerprint(memory);
+      // Detect NEW battle: fingerprint changed from last known state
+      if (fp !== lastBattleFingerprint) {
+        console.log('[Bot] Battle detected, entering...');
+        emulator.setFastForwardMultiplier(1);
+        waitCounter = BATTLE_ENTER_WAIT;
+        battleEnterRetries = 0;
+        setStatus('BATTLE_ENTERING');
+        return;
+      }
     }
 
-    // Walk back and forth on grass
-    walkStep++;
+    // Walk back and forth on grass — only directional buttons, never A
     if (walkStep % 8 === 0) {
       walkDirection = walkDirection === 'Up' ? 'Down' : 'Up';
     }
-    // Press the direction button (non-blocking — we just tap it each tick)
     emulator.buttonPress(walkDirection);
     setTimeout(() => emulator.buttonUnpress(walkDirection), PRESS_DURATION);
   }
 
-  function tickBattleEntering() {
+  async function tickBattleEntering() {
     waitCounter--;
+
+    // Press B periodically to advance battle intro text
+    // ("Wild WURMPLE appeared!", "Go! MUDKIP!", etc.)
+    // B advances text but does NOT select menu items, so it won't accidentally pick FIGHT
+    if (waitCounter > 0 && waitCounter % 5 === 0) {
+      emulator.buttonPress('B');
+      setTimeout(() => emulator.buttonUnpress('B'), PRESS_DURATION);
+    }
+
     if (waitCounter > 0) return;
 
-    // Battle should be loaded now — read wild Pokemon
-    const wild = readWildPokemon(memory);
+    // Refresh memory and read wild Pokemon
+    await memory.refresh();
+    const wild = readWildPokemon(memory, true);
     if (!wild) {
-      // Battle might not be fully loaded yet, wait more
+      battleEnterRetries++;
+      if (battleEnterRetries >= BATTLE_ENTER_MAX_RETRIES) {
+        console.log('[Bot] False battle detection, resuming walk');
+        lastBattleFingerprint = getBattleFingerprint(memory);
+        emulator.setFastForwardMultiplier(4);
+        setStatus('WALKING');
+        return;
+      }
       waitCounter = 20;
       return;
     }
@@ -197,47 +236,51 @@ export function createBotEngine(emulator: Emulator) {
     console.log(`[Bot] Encounter #${encounterCount}: ${wild.name} Lv.${wild.level}`);
 
     if (wild.species === targetSpeciesId) {
-      // Target found!
       console.log(`[Bot] Target ${targetName} found!`);
       setStatus('WAITING_FOR_DECISION');
     } else {
-      // Wrong Pokemon — run away
       setStatus('RUNNING');
       executeRun();
     }
   }
 
   async function executeRun() {
-    // In Pokemon battle menu: Fight/Bag/Pokemon/Run
-    // Run is bottom-right (Down, Right, then A)
-    // First press B to close any text, then navigate to Run
-    await pressButton('B');
+    // Battle menu: FIGHT BAG / POKEMON RUN
+    // Cursor defaults to FIGHT (top-left). Navigate to RUN (bottom-right): Down, Right, A
+    // Note: text is already advanced by tickBattleEntering's A presses
     await pressButton('Down');
     await pressButton('Right');
     await pressButton('A');
 
-    // Wait for run to complete
     waitCounter = RUN_WAIT;
   }
 
-  function tickRunning() {
+  async function tickRunning() {
     waitCounter--;
-    if (waitCounter > 0) return;
 
-    // Check if we exited battle
-    if (!isInBattle(memory)) {
-      // Re-enable fast forward for walking
-      emulator.setFastForwardMultiplier(4);
-      setStatus('WALKING');
-    } else {
-      // Still in battle, might need to press A through text
+    // Press A/B periodically to dismiss text
+    if (waitCounter > 0 && waitCounter % 5 === 0) {
       emulator.buttonPress('A');
       setTimeout(() => emulator.buttonUnpress('A'), PRESS_DURATION);
-      waitCounter = 10;
     }
+
+    if (waitCounter > 0) return;
+
+    // Timeout expired — assume battle ended. Record fingerprint and resume walking.
+    await memory.refresh();
+    lastBattleFingerprint = getBattleFingerprint(memory);
+    console.log('[Bot] Run complete, resuming walk');
+
+    // Press A a few more times to dismiss any remaining text
+    for (let i = 0; i < 3; i++) {
+      await pressButton('A');
+    }
+
+    emulator.setFastForwardMultiplier(4);
+    setStatus('WALKING');
   }
 
-  function tickWaitingForDecision() {
+  async function tickWaitingForDecision() {
     // Check for action from Claude Code via window global
     const w = window as Window & Record<string, unknown>;
     const windowAction = w.botAction as BotAction | null;
@@ -248,7 +291,8 @@ export function createBotEngine(emulator: Emulator) {
 
     if (!pendingAction) return;
 
-    // Check if battle ended (maybe wild Pokemon fainted)
+    // Refresh and check if battle ended
+    await memory.refresh();
     const outcome = getBattleOutcome(memory);
     if (outcome === BATTLE_OUTCOME_CAUGHT) {
       console.log(`[Bot] Caught ${targetName}!`);
@@ -270,13 +314,10 @@ export function createBotEngine(emulator: Emulator) {
       await executeThrowBall(action.ballType);
     }
 
-    // Wait for the action to resolve
     waitCounter = ACTION_WAIT;
   }
 
   async function executeMoveAction(moveIndex: number) {
-    // Navigate to Fight menu and select move
-    // Battle menu: Fight is top-left (default position)
     await pressButton('A'); // Select Fight
 
     // Navigate to correct move slot (0-3)
@@ -297,37 +338,26 @@ export function createBotEngine(emulator: Emulator) {
     console.log(`[Bot] Throwing ${ballType}`);
 
     // Navigate to Bag from battle menu
-    // Bag is top-right: Right from default, then A
     await pressButton('Right');
     await pressButton('A'); // Open Bag
 
-    // Small wait for bag to open
     await new Promise(r => setTimeout(r, 500));
 
-    // In the bag, we need to navigate to the Balls pocket
-    // and select the right ball. The balls pocket navigation
-    // depends on the current pocket. We'll use Left/Right to
-    // switch pockets to the Balls pocket, then select.
-
-    // Press Left to navigate to Poke Balls pocket
-    // (from the default Items pocket, Balls is one to the right)
+    // Navigate to Poke Balls pocket (one right from Items)
     await pressButton('Right');
     await new Promise(r => setTimeout(r, 200));
 
-    // Now navigate within the pocket to find our ball
-    // For simplicity, select the first ball visible (most common approach)
-    // The ball at the top of the list is usually the one we want
-    // In practice, the player should have organized balls appropriately
     await pressButton('A'); // Select the ball
     await new Promise(r => setTimeout(r, 200));
     await pressButton('A'); // Confirm "Use" option
   }
 
-  function tickExecutingAction() {
+  async function tickExecutingAction() {
     waitCounter--;
     if (waitCounter > 0) return;
 
-    // Check battle outcome
+    // Refresh and check battle outcome
+    await memory.refresh();
     const outcome = getBattleOutcome(memory);
     if (outcome === BATTLE_OUTCOME_CAUGHT) {
       console.log(`[Bot] Caught ${targetName}!`);
@@ -335,16 +365,8 @@ export function createBotEngine(emulator: Emulator) {
       stop();
       return;
     }
-    if (outcome === BATTLE_OUTCOME_RAN || !isInBattle(memory)) {
-      // Wild Pokemon fled or battle ended unexpectedly
-      console.log('[Bot] Battle ended unexpectedly, resuming walk');
-      emulator.setFastForwardMultiplier(4);
-      setStatus('WALKING');
-      return;
-    }
 
-    // Battle still going — wait for next decision
-    // Press A/B a few times to advance any text
+    // Battle still going — advance text and wait for next decision
     emulator.buttonPress('A');
     setTimeout(() => {
       emulator.buttonUnpress('A');
