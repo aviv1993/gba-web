@@ -8,6 +8,7 @@ import {
   getBattleFingerprint,
   BATTLE_OUTCOME_CAUGHT,
 } from './game-data.ts';
+import { readGameState } from './game-state.ts';
 
 /** Button press duration in ms */
 const PRESS_DURATION = 80;
@@ -15,18 +16,24 @@ const PRESS_DURATION = 80;
 const PRESS_GAP = 100;
 /** Tick interval in ms */
 const TICK_INTERVAL = 100;
-/** Ticks to wait for battle transition */
+/** Max ticks to wait during battle entering before giving up */
 const BATTLE_ENTER_WAIT = 60;
-/** Max ticks to wait for battle data before assuming false positive */
-const BATTLE_ENTER_MAX_RETRIES = 5;
+/** Min ticks to stay in BATTLE_ENTERING (B presses to dismiss all intro text) */
+const BATTLE_ENTER_MIN = 20;
 /** Ticks to wait after running (press A through text) */
 const RUN_WAIT = 40;
-/** Extra ticks to press through post-run text */
-const POST_RUN_DISMISS = 20;
 /** Frames to wait after executing an action */
 const ACTION_WAIT = 60;
 /** How often to refresh memory during walking (every N ticks) */
 const WALK_REFRESH_INTERVAL = 10;
+/** Number of B presses to dismiss lingering text before menu navigation */
+const TEXT_DISMISS_COUNT = 3;
+/** Ms to wait for battle menu animation to complete */
+const MENU_READINESS_WAIT = 500;
+/** Ms to wait for bag screen to open */
+const BAG_OPEN_WAIT = 500;
+/** Ms to wait between bag navigation steps */
+const BAG_NAV_WAIT = 200;
 
 export function createBotEngine(emulator: Emulator) {
   const memory = new MemoryReader(emulator);
@@ -82,6 +89,17 @@ export function createBotEngine(emulator: Emulator) {
         setTimeout(resolve, PRESS_GAP);
       }, PRESS_DURATION);
     });
+  }
+
+  /** Press a button N times sequentially. */
+  async function pressButtonN(button: string, count: number) {
+    for (let i = 0; i < count; i++) {
+      await pressButton(button);
+    }
+  }
+
+  function delay(ms: number): Promise<void> {
+    return new Promise(r => setTimeout(r, ms));
   }
 
   async function start(name: string) {
@@ -183,12 +201,18 @@ export function createBotEngine(emulator: Emulator) {
     walkStep++;
     if (walkStep % WALK_REFRESH_INTERVAL === 0) {
       await memory.refresh();
+
+      // Primary detection: fingerprint change (catches battle entry even during transition)
       const fp = getBattleFingerprint(memory);
-      // Detect NEW battle: fingerprint changed from last known state
-      if (fp !== lastBattleFingerprint) {
-        console.log('[Bot] Battle detected, entering...');
+      const fingerprintChanged = fp !== lastBattleFingerprint;
+
+      // Secondary detection: screen type from gMain.inBattle flag
+      const gameState = readGameState(memory);
+      const screenIsBattle = gameState.screen.type === 'battle';
+
+      if (fingerprintChanged || screenIsBattle) {
+        console.log(`[Bot] Battle detected (fingerprint=${fingerprintChanged}, screen=${screenIsBattle})`);
         emulator.setFastForwardMultiplier(1);
-        waitCounter = BATTLE_ENTER_WAIT;
         battleEnterRetries = 0;
         setStatus('BATTLE_ENTERING');
         return;
@@ -204,31 +228,45 @@ export function createBotEngine(emulator: Emulator) {
   }
 
   async function tickBattleEntering() {
-    waitCounter--;
-
     // Press B periodically to advance battle intro text
     // ("Wild WURMPLE appeared!", "Go! MUDKIP!", etc.)
     // B advances text but does NOT select menu items, so it won't accidentally pick FIGHT
-    if (waitCounter > 0 && waitCounter % 5 === 0) {
+    if (battleEnterRetries % 3 === 0) {
       emulator.buttonPress('B');
       setTimeout(() => emulator.buttonUnpress('B'), PRESS_DURATION);
     }
+    battleEnterRetries++;
 
-    if (waitCounter > 0) return;
-
-    // Refresh memory and read wild Pokemon
+    // Refresh memory and check screen state
     await memory.refresh();
-    const wild = readWildPokemon(memory, true);
-    if (!wild) {
-      battleEnterRetries++;
-      if (battleEnterRetries >= BATTLE_ENTER_MAX_RETRIES) {
-        console.log('[Bot] False battle detection, resuming walk');
+    const gameState = readGameState(memory);
+
+    // Wait until the game confirms we're in battle via screen detection
+    if (gameState.screen.type !== 'battle') {
+      if (battleEnterRetries >= BATTLE_ENTER_WAIT) {
+        console.log('[Bot] Battle transition timed out, resuming walk');
         lastBattleFingerprint = getBattleFingerprint(memory);
         emulator.setFastForwardMultiplier(4);
         setStatus('WALKING');
-        return;
       }
-      waitCounter = 20;
+      return;
+    }
+
+    // Screen confirms battle — now read wild Pokemon data
+    const wild = readWildPokemon(memory, true);
+    if (!wild) {
+      if (battleEnterRetries >= BATTLE_ENTER_WAIT) {
+        console.log('[Bot] In battle but no valid wild data, resuming walk');
+        lastBattleFingerprint = getBattleFingerprint(memory);
+        emulator.setFastForwardMultiplier(4);
+        setStatus('WALKING');
+      }
+      return;
+    }
+
+    // Keep pressing B to dismiss all intro text before proceeding
+    // (screen.type becomes 'battle' early in the transition, before the menu is ready)
+    if (battleEnterRetries < BATTLE_ENTER_MIN) {
       return;
     }
 
@@ -246,11 +284,9 @@ export function createBotEngine(emulator: Emulator) {
 
   async function executeRun() {
     // Dismiss any remaining text — B advances text but won't select menu items
-    for (let i = 0; i < 3; i++) {
-      await pressButton('B');
-    }
+    await pressButtonN('B', TEXT_DISMISS_COUNT);
     // Wait for battle menu to be fully visible and interactive
-    await new Promise(r => setTimeout(r, 500));
+    await delay(MENU_READINESS_WAIT);
 
     // Battle menu: FIGHT BAG / POKEMON RUN
     // Down+Right reaches RUN from any cursor position (Gen 3 uses clamped navigation)
@@ -265,25 +301,35 @@ export function createBotEngine(emulator: Emulator) {
     waitCounter--;
 
     // Press A/B periodically to dismiss text
-    if (waitCounter > 0 && waitCounter % 5 === 0) {
+    if (waitCounter % 5 === 0) {
       emulator.buttonPress('A');
       setTimeout(() => emulator.buttonUnpress('A'), PRESS_DURATION);
     }
 
-    if (waitCounter > 0) return;
+    // Check screen state to detect when we're back on the overworld
+    if (waitCounter <= 0 || waitCounter % 5 === 0) {
+      await memory.refresh();
+      const gameState = readGameState(memory);
 
-    // Timeout expired — assume battle ended. Record fingerprint and resume walking.
-    await memory.refresh();
-    lastBattleFingerprint = getBattleFingerprint(memory);
-    console.log('[Bot] Run complete, resuming walk');
-
-    // Press A a few more times to dismiss any remaining text
-    for (let i = 0; i < 3; i++) {
-      await pressButton('A');
+      if (gameState.screen.type === 'overworld') {
+        lastBattleFingerprint = getBattleFingerprint(memory);
+        console.log('[Bot] Run complete (overworld detected), resuming walk');
+        await pressButtonN('A', TEXT_DISMISS_COUNT);
+        emulator.setFastForwardMultiplier(4);
+        setStatus('WALKING');
+        return;
+      }
     }
 
-    emulator.setFastForwardMultiplier(4);
-    setStatus('WALKING');
+    // Fallback: if we've waited way too long, force resume
+    if (waitCounter < -RUN_WAIT) {
+      await memory.refresh();
+      lastBattleFingerprint = getBattleFingerprint(memory);
+      console.log('[Bot] Run timeout fallback, resuming walk');
+      await pressButtonN('A', TEXT_DISMISS_COUNT);
+      emulator.setFastForwardMultiplier(4);
+      setStatus('WALKING');
+    }
   }
 
   async function tickWaitingForDecision() {
@@ -347,14 +393,14 @@ export function createBotEngine(emulator: Emulator) {
     await pressButton('Right');
     await pressButton('A'); // Open Bag
 
-    await new Promise(r => setTimeout(r, 500));
+    await delay(BAG_OPEN_WAIT);
 
     // Navigate to Poke Balls pocket (one right from Items)
     await pressButton('Right');
-    await new Promise(r => setTimeout(r, 200));
+    await delay(BAG_NAV_WAIT);
 
     await pressButton('A'); // Select the ball
-    await new Promise(r => setTimeout(r, 200));
+    await delay(BAG_NAV_WAIT);
     await pressButton('A'); // Confirm "Use" option
   }
 

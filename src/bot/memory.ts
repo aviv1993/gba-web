@@ -3,15 +3,19 @@ import type { Emulator } from './types.ts';
 /**
  * GBA memory map constants.
  * EWRAM: 256KB at 0x02000000
+ * IWRAM: 32KB at 0x03000000
  */
 const EWRAM_BASE = 0x02000000;
 const EWRAM_SIZE = 0x40000; // 256KB
+const IWRAM_BASE = 0x03000000;
+const IWRAM_SIZE = 0x8000; // 32KB
 
 /**
- * Offset of EWRAM within mGBA's decompressed save state data.
- * Empirically discovered: state layout is header+CPU+IO+video (~0x21000 bytes),
- * then EWRAM (0x40000), then IWRAM (0x8000). Total = 0x61000 = 397312 bytes.
+ * Offsets within mGBA's decompressed save state data.
+ * Layout: header+CPU+IO+video (0x19000), IWRAM (0x8000), EWRAM (0x40000).
+ * Total = 0x19000 + 0x8000 + 0x40000 = 0x61000 = 397312 bytes.
  */
+const IWRAM_STATE_OFFSET = 0x19000;
 const EWRAM_STATE_OFFSET = 0x21000;
 
 /**
@@ -28,6 +32,7 @@ const EWRAM_STATE_OFFSET = 0x21000;
 export class MemoryReader {
   private emulator: Emulator;
   private ewramCache: Uint8Array | null = null;
+  private iwramCache: Uint8Array | null = null;
   private initialized = false;
 
   constructor(emulator: Emulator) {
@@ -70,44 +75,50 @@ export class MemoryReader {
     const stateData = await this.extractStateFromPng(fileData);
     if (!stateData) return false;
 
-    // Extract EWRAM from the known offset
+    // Extract EWRAM and IWRAM from the known offsets
     if (EWRAM_STATE_OFFSET + EWRAM_SIZE > stateData.length) {
       console.error(`[Bot Memory] State data too small: ${stateData.length} bytes, need ${EWRAM_STATE_OFFSET + EWRAM_SIZE}`);
       return false;
     }
 
     this.ewramCache = stateData.slice(EWRAM_STATE_OFFSET, EWRAM_STATE_OFFSET + EWRAM_SIZE);
+    this.iwramCache = stateData.slice(IWRAM_STATE_OFFSET, IWRAM_STATE_OFFSET + IWRAM_SIZE);
     return true;
   }
 
   readU8(gbaAddr: number): number {
-    const offset = this.resolveOffset(gbaAddr);
-    if (offset === null || !this.ewramCache) return 0;
-    return this.ewramCache[offset];
+    const resolved = this.resolveOffset(gbaAddr);
+    if (!resolved) return 0;
+    return resolved.cache[resolved.offset];
   }
 
   readU16(gbaAddr: number): number {
-    const offset = this.resolveOffset(gbaAddr);
-    if (offset === null || !this.ewramCache) return 0;
-    return this.ewramCache[offset] | (this.ewramCache[offset + 1] << 8);
+    const resolved = this.resolveOffset(gbaAddr);
+    if (!resolved) return 0;
+    const { cache, offset } = resolved;
+    return cache[offset] | (cache[offset + 1] << 8);
   }
 
   readU32(gbaAddr: number): number {
-    const offset = this.resolveOffset(gbaAddr);
-    if (offset === null || !this.ewramCache) return 0;
-    return (this.ewramCache[offset] | (this.ewramCache[offset + 1] << 8) |
-      (this.ewramCache[offset + 2] << 16) | (this.ewramCache[offset + 3] << 24)) >>> 0;
+    const resolved = this.resolveOffset(gbaAddr);
+    if (!resolved) return 0;
+    const { cache, offset } = resolved;
+    return (cache[offset] | (cache[offset + 1] << 8) |
+      (cache[offset + 2] << 16) | (cache[offset + 3] << 24)) >>> 0;
   }
 
   readBytes(gbaAddr: number, length: number): Uint8Array {
-    const offset = this.resolveOffset(gbaAddr);
-    if (offset === null || !this.ewramCache) return new Uint8Array(length);
-    return this.ewramCache.slice(offset, offset + length);
+    const resolved = this.resolveOffset(gbaAddr);
+    if (!resolved) return new Uint8Array(length);
+    return resolved.cache.slice(resolved.offset, resolved.offset + length);
   }
 
-  private resolveOffset(gbaAddr: number): number | null {
-    if (gbaAddr >= EWRAM_BASE && gbaAddr < EWRAM_BASE + EWRAM_SIZE) {
-      return gbaAddr - EWRAM_BASE;
+  private resolveOffset(gbaAddr: number): { cache: Uint8Array; offset: number } | null {
+    if (gbaAddr >= EWRAM_BASE && gbaAddr < EWRAM_BASE + EWRAM_SIZE && this.ewramCache) {
+      return { cache: this.ewramCache, offset: gbaAddr - EWRAM_BASE };
+    }
+    if (gbaAddr >= IWRAM_BASE && gbaAddr < IWRAM_BASE + IWRAM_SIZE && this.iwramCache) {
+      return { cache: this.iwramCache, offset: gbaAddr - IWRAM_BASE };
     }
     return null;
   }

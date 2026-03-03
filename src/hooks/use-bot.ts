@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useEmulatorContext } from '../emulator-context.tsx';
 import { createBotEngine } from '../bot/engine.ts';
+import { MemoryReader } from '../bot/memory.ts';
+import { readGameState } from '../bot/game-state.ts';
 import type { BotState, BotAction } from '../bot/types.ts';
 
 const IDLE_STATE: BotState = {
@@ -47,6 +49,14 @@ export function useBot() {
     };
     w.getBotState = () => eng.getState();
 
+    // Game state reader — independent of bot engine
+    const gameMemory = new MemoryReader(emulator);
+    gameMemory.init();
+    w.getGameState = async () => {
+      await gameMemory.refresh();
+      return readGameState(gameMemory);
+    };
+
     return () => {
       eng.destroy();
       engineRef.current = null;
@@ -54,6 +64,7 @@ export function useBot() {
       delete w.stopBot;
       delete w.setBotAction;
       delete w.getBotState;
+      delete w.getGameState;
     };
   }, [emulator, romLoaded]);
 

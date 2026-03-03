@@ -62,6 +62,51 @@ export type BotAction =
   | { type: 'use_move'; moveIndex: number }
   | { type: 'throw_ball'; ballType: 'pokeball' | 'greatball' | 'ultraball' | 'masterball' };
 
+// --- Game State Model ---
+
+export type Screen =
+  | { type: 'overworld' }
+  | { type: 'battle' }
+  | { type: 'unknown'; callback2: number };
+
+export interface Location {
+  mapGroup: number;
+  mapNum: number;
+  mapName: string;
+  x: number;
+  y: number;
+}
+
+export interface PartyOverview {
+  slot: number;
+  level: number;
+  hp: number;
+  maxHp: number;
+  status: string;
+}
+
+export interface BagSlot {
+  itemId: number;
+  quantity: number;
+}
+
+export interface FullBag {
+  items: BagSlot[];
+  keyItems: BagSlot[];
+  balls: BagSlot[];
+  tms: BagSlot[];
+  berries: BagSlot[];
+}
+
+export interface GameState {
+  screen: Screen;
+  location: Location;
+  party: PartyOverview[];
+  bag: FullBag;
+  money: number;
+  battle: BattleState | null;
+}
+
 export interface BotEngine {
   start(targetName: string): void;
   stop(): void;

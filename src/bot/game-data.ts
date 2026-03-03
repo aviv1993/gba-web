@@ -10,6 +10,8 @@ import { getSpeciesName, internalToNational } from './pokemon-db.ts';
  * both US and EU versions of Ruby/Sapphire.
  */
 
+// --- EWRAM addresses ---
+
 // gBattleMons — array of BattlePokemon structs (58h bytes each)
 // Index 0 = player's active Pokemon, Index 1 = enemy/wild Pokemon
 const ADDR_BATTLE_MONS = 0x02024A80;
@@ -31,13 +33,48 @@ const BATTLE_MON_LEVEL = 0x2A;         // u8
 const BATTLE_MON_MAX_HP = 0x2C;        // u16
 const BATTLE_MON_STATUS = 0x4C;        // u32 — status1 condition flags
 
-// Bag: Poke Balls pocket is within gSaveBlock1 (at 0x02023A60)
-// Balls pocket offset within SaveBlock1 = 0x600
-// Item entries are 4 bytes: item_id (u16) + quantity (u16)
-const ADDR_SAVE_BLOCK_1 = 0x02023A60;
-const BAG_BALLS_POCKET_OFFSET = 0x600;
-const ADDR_BAG_BALLS_POCKET = ADDR_SAVE_BLOCK_1 + BAG_BALLS_POCKET_OFFSET;
-const BAG_BALLS_POCKET_SIZE = 16;          // max slots in balls pocket
+// gSaveBlock1 — main save data structure
+// EU ROM address, empirically validated. US ROM uses 0x02023A60.
+export const ADDR_SAVE_BLOCK_1 = 0x02025734;
+
+// SaveBlock1 field offsets
+export const SB1_POS = 0x00;              // Coords16: s16 x, s16 y
+export const SB1_LOCATION = 0x04;         // WarpData: s8 mapGroup, s8 mapNum, s8 warpId, s16 x, s16 y
+export const SB1_PARTY_COUNT = 0x234;     // u8 — number of Pokemon in party (0-6)
+export const SB1_PARTY = 0x238;           // Pokemon[6] — 100 bytes each
+export const SB1_MONEY = 0x490;           // u32
+// Bag pockets (ItemSlot = u16 itemId + u16 quantity = 4 bytes each)
+export const SB1_BAG_ITEMS = 0x560;       // 20 slots
+export const SB1_BAG_KEY_ITEMS = 0x5B0;   // 20 slots
+export const SB1_BAG_BALLS = 0x600;       // 16 slots (only ~16 ball types exist)
+export const SB1_BAG_TMS = 0x740;         // 64 slots
+export const SB1_BAG_BERRIES = 0x840;     // 43 slots
+
+// Bag pocket sizes (number of item slots)
+export const BAG_ITEMS_SIZE = 20;
+export const BAG_KEY_ITEMS_SIZE = 20;
+export const BAG_BALLS_SIZE = 16;
+export const BAG_TMS_SIZE = 64;
+export const BAG_BERRIES_SIZE = 43;
+
+// Party Pokemon struct offsets (within 100-byte struct)
+// First 80 bytes (BoxPokemon) contains encrypted data — species, moves, items
+// Bytes 0x50+ are unencrypted calculated stats
+export const PARTY_MON_SIZE = 100;
+export const PARTY_MON_STATUS = 0x50;     // u32 — status condition flags
+export const PARTY_MON_LEVEL = 0x54;      // u8
+export const PARTY_MON_HP = 0x56;         // u16
+export const PARTY_MON_MAX_HP = 0x58;     // u16
+
+// --- IWRAM addresses ---
+
+// gMain struct — main game loop state (EU ROM, empirically validated)
+// Note: gMain.inBattle flag address is unknown for EU ROM; use callback2 comparison instead
+export const ADDR_GMAIN_CALLBACK2 = 0x03001774; // u32, function pointer to current screen handler
+
+// Legacy aliases
+const ADDR_BAG_BALLS_POCKET = ADDR_SAVE_BLOCK_1 + SB1_BAG_BALLS;
+const BAG_BALLS_POCKET_SIZE = BAG_BALLS_SIZE;
 
 // Item IDs for Pokeballs
 const ITEM_POKEBALL = 4;
