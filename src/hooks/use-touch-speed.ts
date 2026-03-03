@@ -23,7 +23,8 @@ export function useTouchSpeed() {
       const gap = now - lastTapRef.current;
 
       if (gap < DOUBLE_TAP_MS) {
-        // Second tap — engage fast-forward
+        // Second tap — engage fast-forward, prevent Safari double-tap zoom
+        e.preventDefault();
         holdingRef.current = true;
         emulator!.setFastForwardMultiplier(speed * 2);
         lastTapRef.current = 0; // Reset so a third tap doesn't re-trigger
@@ -43,7 +44,7 @@ export function useTouchSpeed() {
     const gameArea = document.querySelector('.game-area');
     if (!gameArea) return;
 
-    gameArea.addEventListener('touchstart', onTouchStart as EventListener, { passive: true });
+    gameArea.addEventListener('touchstart', onTouchStart as EventListener, { passive: false });
     gameArea.addEventListener('touchend', onTouchEnd as EventListener, { passive: true });
     gameArea.addEventListener('touchcancel', onTouchEnd as EventListener, { passive: true });
 
