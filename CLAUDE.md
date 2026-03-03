@@ -50,6 +50,8 @@ Single CSS file (`src/index.css`) with CSS custom properties. Three layout modes
 
 Docker two-stage build. `scripts/deploy.sh` rsyncs to target host and runs `docker compose up --build`. Named volume at `/app/saves` for persistence.
 
+**Always deploy to production for E2E testing.** The PWA service worker aggressively caches JS bundles, so `localhost:5173` (dev server) may not reflect what users see. Run `bash scripts/deploy.sh` to build and push to https://gba.mini-mil.com, then test there.
+
 ## Important Configuration
 
 - `vite.config.ts`: mGBA WASM package excluded from Vite pre-bundling (`optimizeDeps.exclude`). PWA workbox caches files up to 50MB (for the WASM binary). Dev/preview servers set COOP/COEP headers.
@@ -85,7 +87,7 @@ The `MemoryReader.refresh()` method must be called before each batch of reads to
 - `gBattleTypeFlags` (0x239FC) is at a different address in EU ROMs — unreliable
 - `gBattleMons` data **persists in EWRAM after battles end** (the game doesn't zero it), so simply checking for valid species/HP always returns true once you've been in one battle
 - **Fix**: `getBattleFingerprint()` hashes enemy species+level+HP+maxHP+move1+playerHP. A fingerprint *change* indicates a new battle started. On bot start, an initial fingerprint is recorded; during walking, the bot compares current fingerprint against the last known one.
-- **Battle exit** is timeout-based (not memory-based) — after pressing RUN, wait a fixed number of ticks, then record the new fingerprint and resume walking.
+- **Battle exit** uses screen-state detection — after pressing RUN, `tickRunning` checks `readGameState().screen.type` every 5 ticks (500ms). On `'overworld'`, the fingerprint is recorded and walking resumes. If still `'battle'` after `RUN_WAIT` ticks (4s), re-navigate Down×3+Right×3+A without the full menu wait, up to `RUN_MAX_RETRIES` times every `RUN_RETRY_INTERVAL` (2s). This handles the Gen 3 "Can't escape!" mechanic — the first escape attempt may fail based on speed stat comparison, but subsequent attempts succeed as the game's `escape_attempts` counter increments.
 
 Key addresses (in `src/bot/game-data.ts`, from [pret/pokeruby](https://github.com/pret/pokeruby)):
 - `gBattleMons`: `0x02024A80` — array of `BattlePokemon` structs (0x58 bytes each). Index 0 = player, index 1 = enemy.
@@ -97,6 +99,7 @@ Key addresses (in `src/bot/game-data.ts`, from [pret/pokeruby](https://github.co
 
 The bot injects inputs via `emulator.buttonPress()`/`buttonUnpress()` with careful timing:
 - **B for text advancement**: During battle intro, press B (not A) to advance text boxes. B advances text identically to A but does NOT select menu items, preventing accidental FIGHT selection if the battle menu appears mid-press.
-- **Menu readiness gap**: gBattleMons data is populated in memory during battle init, **before the UI transition completes**. The bot must wait for the menu to be visually interactive before sending navigation inputs. `executeRun()` presses B three times to dismiss any lingering text, then waits 500ms for the menu animation, before pressing Down+Right+A.
+- **Menu readiness gap**: gBattleMons data is populated in memory during battle init, **before the UI transition completes**. The bot must wait for the menu to be visually interactive before sending navigation inputs. `executeRun()` presses B three times to dismiss any lingering text, then waits 2500ms for the menu animation, before pressing Down×3+Right×3+A (redundant presses ensure cursor reaches RUN even if a press is dropped). Total time from battle detection to navigation ≈ 5000ms (2000ms BATTLE_ENTER_MIN + 540ms B×3 + 2500ms wait), which safely clears the RS battle intro (~4–5s at 1x).
 - **Async with re-entry guard**: All tick functions are async (for save-state decompression). A `tickInProgress` flag prevents overlapping ticks. Async button sequences (like `executeRun`) must be `await`ed to prevent concurrent ticks from sending conflicting inputs.
 - **Gen 3 battle menu**: Uses clamped (non-wrapping) navigation — Down always moves to the bottom row, Right always moves to the right column. So Down+Right reaches RUN from any starting cursor position.
+- **"Can't escape!" retries**: When escape fails, the game shows "Can't escape!" text then returns to the battle menu. B presses every 500ms dismiss the text. After `RUN_WAIT` (4s), the bot re-navigates Down×3+Right×3+A directly (no 2500ms menu wait needed — menu is already up). Retries every 2s up to `RUN_MAX_RETRIES=3` before giving up and resuming walk.
