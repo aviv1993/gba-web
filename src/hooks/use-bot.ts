@@ -1,8 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useEmulatorContext } from '../emulator-context.tsx';
 import { createBotEngine } from '../bot/engine.ts';
-import { MemoryReader } from '../bot/memory.ts';
-import { readGameState } from '../bot/game-state.ts';
 import type { BotState, BotAction } from '../bot/types.ts';
 
 const IDLE_STATE: BotState = {
@@ -14,7 +12,7 @@ const IDLE_STATE: BotState = {
 };
 
 export function useBot() {
-  const { emulator, romLoaded } = useEmulatorContext();
+  const { emulator, romLoaded, setSpeed } = useEmulatorContext();
   const [botState, setBotState] = useState<BotState>(IDLE_STATE);
   const engineRef = useRef<ReturnType<typeof createBotEngine> | null>(null);
 
@@ -32,7 +30,7 @@ export function useBot() {
   useEffect(() => {
     if (!emulator || !romLoaded) return;
 
-    const eng = createBotEngine(emulator);
+    const eng = createBotEngine(emulator, setSpeed);
     engineRef.current = eng;
 
     // Expose window globals for Playwright/Claude Code
@@ -49,14 +47,6 @@ export function useBot() {
     };
     w.getBotState = () => eng.getState();
 
-    // Game state reader — independent of bot engine
-    const gameMemory = new MemoryReader(emulator);
-    gameMemory.init();
-    w.getGameState = async () => {
-      await gameMemory.refresh();
-      return readGameState(gameMemory);
-    };
-
     return () => {
       eng.destroy();
       engineRef.current = null;
@@ -64,9 +54,8 @@ export function useBot() {
       delete w.stopBot;
       delete w.setBotAction;
       delete w.getBotState;
-      delete w.getGameState;
     };
-  }, [emulator, romLoaded]);
+  }, [emulator, romLoaded, setSpeed]);
 
   const stopBot = useCallback(() => {
     engineRef.current?.stop();
