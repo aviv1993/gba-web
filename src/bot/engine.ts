@@ -20,8 +20,10 @@ const TICK_INTERVAL = 100;
 const BATTLE_ENTER_WAIT = 60;
 /** Min ticks to stay in BATTLE_ENTERING (B presses to dismiss all intro text) */
 const BATTLE_ENTER_MIN = 20;
-/** Ticks to wait after running (press A through text) */
+/** Ticks to wait after initial executeRun before first retry check */
 const RUN_WAIT = 40;
+/** Ticks between subsequent RUN re-navigation attempts */
+const RUN_RETRY_INTERVAL = 20;
 /** Frames to wait after executing an action */
 const ACTION_WAIT = 60;
 /** How often to refresh memory during walking (every N ticks) */
@@ -29,13 +31,15 @@ const WALK_REFRESH_INTERVAL = 10;
 /** Number of B presses to dismiss lingering text before menu navigation */
 const TEXT_DISMISS_COUNT = 3;
 /** Ms to wait for battle menu animation to complete */
-const MENU_READINESS_WAIT = 500;
+const MENU_READINESS_WAIT = 2500;
+/** Max number of times to retry executeRun before giving up and resuming walk */
+const RUN_MAX_RETRIES = 3;
 /** Ms to wait for bag screen to open */
 const BAG_OPEN_WAIT = 500;
 /** Ms to wait between bag navigation steps */
 const BAG_NAV_WAIT = 200;
 
-export function createBotEngine(emulator: Emulator) {
+export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: number) => void) {
   const memory = new MemoryReader(emulator);
 
   let status: BotStatus = 'IDLE';
@@ -51,6 +55,7 @@ export function createBotEngine(emulator: Emulator) {
   let walkStep = 0;
   let previousSpeed = 1;
   let battleEnterRetries = 0;
+  let runRetryCount = 0;
   /** Fingerprint of the last battle's gBattleMons data, used to detect NEW battles. */
   let lastBattleFingerprint: string | null = null;
 
@@ -130,7 +135,7 @@ export function createBotEngine(emulator: Emulator) {
 
     // Save current speed and enable fast forward
     previousSpeed = emulator.getFastForwardMultiplier();
-    emulator.setFastForwardMultiplier(4);
+    setSpeedMultiplier(4);
 
     setStatus('WALKING');
     tickTimer = setInterval(tick, TICK_INTERVAL);
@@ -141,7 +146,7 @@ export function createBotEngine(emulator: Emulator) {
       clearInterval(tickTimer);
       tickTimer = null;
     }
-    emulator.setFastForwardMultiplier(previousSpeed);
+    setSpeedMultiplier(previousSpeed);
     if (status !== 'DONE' && status !== 'ERROR') {
       setStatus('IDLE');
     }
@@ -212,7 +217,7 @@ export function createBotEngine(emulator: Emulator) {
 
       if (fingerprintChanged || screenIsBattle) {
         console.log(`[Bot] Battle detected (fingerprint=${fingerprintChanged}, screen=${screenIsBattle})`);
-        emulator.setFastForwardMultiplier(1);
+        setSpeedMultiplier(previousSpeed);
         battleEnterRetries = 0;
         setStatus('BATTLE_ENTERING');
         return;
@@ -237,36 +242,35 @@ export function createBotEngine(emulator: Emulator) {
     }
     battleEnterRetries++;
 
-    // Refresh memory and check screen state
+    // Phase 1: Just press B, no save states. Save state operations can interfere
+    // with the emulator's input processing, causing button presses to be dropped.
+    // Let the game run uninterrupted while we dismiss intro text.
+    if (battleEnterRetries < BATTLE_ENTER_MIN) {
+      return;
+    }
+
+    // Phase 2: Refresh memory and identify the wild Pokemon
     await memory.refresh();
     const gameState = readGameState(memory);
 
-    // Wait until the game confirms we're in battle via screen detection
     if (gameState.screen.type !== 'battle') {
       if (battleEnterRetries >= BATTLE_ENTER_WAIT) {
         console.log('[Bot] Battle transition timed out, resuming walk');
         lastBattleFingerprint = getBattleFingerprint(memory);
-        emulator.setFastForwardMultiplier(4);
+        setSpeedMultiplier(4);
         setStatus('WALKING');
       }
       return;
     }
 
-    // Screen confirms battle — now read wild Pokemon data
     const wild = readWildPokemon(memory, true);
     if (!wild) {
       if (battleEnterRetries >= BATTLE_ENTER_WAIT) {
         console.log('[Bot] In battle but no valid wild data, resuming walk');
         lastBattleFingerprint = getBattleFingerprint(memory);
-        emulator.setFastForwardMultiplier(4);
+        setSpeedMultiplier(4);
         setStatus('WALKING');
       }
-      return;
-    }
-
-    // Keep pressing B to dismiss all intro text before proceeding
-    // (screen.type becomes 'battle' early in the transition, before the menu is ready)
-    if (battleEnterRetries < BATTLE_ENTER_MIN) {
       return;
     }
 
@@ -277,6 +281,7 @@ export function createBotEngine(emulator: Emulator) {
       console.log(`[Bot] Target ${targetName} found!`);
       setStatus('WAITING_FOR_DECISION');
     } else {
+      runRetryCount = 0;
       setStatus('RUNNING');
       await executeRun();
     }
@@ -289,9 +294,11 @@ export function createBotEngine(emulator: Emulator) {
     await delay(MENU_READINESS_WAIT);
 
     // Battle menu: FIGHT BAG / POKEMON RUN
-    // Down+Right reaches RUN from any cursor position (Gen 3 uses clamped navigation)
-    await pressButton('Down');
-    await pressButton('Right');
+    // Navigate to RUN with redundant presses — clamped navigation makes
+    // double-pressing harmless, but ensures the cursor reaches RUN even
+    // if an individual press is dropped by the emulator
+    await pressButtonN('Down', 3);
+    await pressButtonN('Right', 3);
     await pressButton('A');
 
     waitCounter = RUN_WAIT;
@@ -300,35 +307,44 @@ export function createBotEngine(emulator: Emulator) {
   async function tickRunning() {
     waitCounter--;
 
-    // Press A/B periodically to dismiss text
+    // Press B periodically to dismiss text ("Got away safely!", "Can't escape!", etc.)
     if (waitCounter % 5 === 0) {
-      emulator.buttonPress('A');
-      setTimeout(() => emulator.buttonUnpress('A'), PRESS_DURATION);
+      emulator.buttonPress('B');
+      setTimeout(() => emulator.buttonUnpress('B'), PRESS_DURATION);
     }
 
-    // Check screen state to detect when we're back on the overworld
-    if (waitCounter <= 0 || waitCounter % 5 === 0) {
+    // Check screen state every 5 ticks and when the wait timer expires
+    if (waitCounter % 5 === 0 || waitCounter <= 0) {
       await memory.refresh();
       const gameState = readGameState(memory);
 
       if (gameState.screen.type === 'overworld') {
         lastBattleFingerprint = getBattleFingerprint(memory);
         console.log('[Bot] Run complete (overworld detected), resuming walk');
-        await pressButtonN('A', TEXT_DISMISS_COUNT);
-        emulator.setFastForwardMultiplier(4);
+        await pressButtonN('B', TEXT_DISMISS_COUNT);
+        setSpeedMultiplier(4);
         setStatus('WALKING');
         return;
       }
-    }
 
-    // Fallback: if we've waited way too long, force resume
-    if (waitCounter < -RUN_WAIT) {
-      await memory.refresh();
-      lastBattleFingerprint = getBattleFingerprint(memory);
-      console.log('[Bot] Run timeout fallback, resuming walk');
-      await pressButtonN('A', TEXT_DISMISS_COUNT);
-      emulator.setFastForwardMultiplier(4);
-      setStatus('WALKING');
+      // Still in battle and timer expired — re-navigate to RUN without the full menu wait
+      // (handles "Can't escape!" by retrying quickly once the menu reappears)
+      if (waitCounter <= 0) {
+        if (runRetryCount >= RUN_MAX_RETRIES) {
+          lastBattleFingerprint = getBattleFingerprint(memory);
+          console.log('[Bot] Run max retries exceeded, resuming walk');
+          await pressButtonN('B', TEXT_DISMISS_COUNT);
+          setSpeedMultiplier(4);
+          setStatus('WALKING');
+          return;
+        }
+        runRetryCount++;
+        console.log(`[Bot] Still in battle, re-navigating to RUN (attempt ${runRetryCount})`);
+        await pressButtonN('Down', 3);
+        await pressButtonN('Right', 3);
+        await pressButton('A');
+        waitCounter = RUN_RETRY_INTERVAL;
+      }
     }
   }
 
