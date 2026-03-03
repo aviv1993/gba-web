@@ -19,6 +19,18 @@ app.use((_req, res, next) => {
 app.use('/api/saves', savesRouter);
 app.use('/api/roms', romRouter);
 
+// Cache headers for static assets:
+// - sw.js and index.html must never be cached (they change on every deploy)
+// - Content-hashed assets (/assets/*) are immutable and can be cached forever
+app.use((req, res, next) => {
+  if (req.path === '/sw.js' || req.path === '/index.html' || req.path === '/') {
+    res.setHeader('Cache-Control', 'no-store, no-cache');
+  } else if (req.path.startsWith('/assets/')) {
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+  }
+  next();
+});
+
 // Serve static frontend build
 const distPath = path.join(__dirname, '..', 'dist');
 app.use(express.static(distPath));

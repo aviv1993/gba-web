@@ -25,3 +25,9 @@ dist-ssr
 
 # Save data
 saves/
+
+# Test ROMs
+*.gba
+
+# Playwright MCP
+.playwright-mcp/
