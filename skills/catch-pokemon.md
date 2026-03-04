@@ -15,7 +15,7 @@ You are controlling a Pokemon catching bot in a GBA emulator running in a browse
 
 1. Navigate to the emulator:
 ```js
-// browser_navigate to http://localhost:5173 (or wherever the dev server is)
+// browser_navigate to https://gba.mini-mil.com
 ```
 
 2. Verify the emulator is ready:

@@ -227,7 +227,6 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
 
       if (fingerprintChanged || screenIsBattle) {
         console.log(`[Bot] Battle detected (fingerprint=${fingerprintChanged}, screen=${screenIsBattle})`);
-        setSpeedMultiplier(previousSpeed);
         battleEnterRetries = 0;
         setStatus('BATTLE_ENTERING');
         return;
