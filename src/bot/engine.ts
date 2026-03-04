@@ -10,6 +10,8 @@ import {
   BATTLE_OUTCOME_CAUGHT,
   BATTLE_OUTCOME_WON,
   BATTLE_OUTCOME_LOST,
+  ADDR_SAVE_BLOCK_1,
+  SB1_PARTY_COUNT,
 } from './game-data.ts';
 import { readGameState } from './game-state.ts';
 
@@ -63,6 +65,8 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
   let lastBattleFingerprint: string | null = null;
   /** Whether this is the first time opening the bag in the current battle. */
   let firstBagOpenThisBattle = true;
+  /** Party count before throwing a ball, used to detect catches. */
+  let partyCountBeforeThrow = 0;
 
   function getState(): BotState {
     const battleState = (status === 'WAITING_FOR_DECISION' || status === 'EXECUTING_ACTION')
@@ -358,6 +362,8 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     }
   }
 
+  let waitingCheckCounter = 0;
+
   async function tickWaitingForDecision() {
     // Check for action from Claude Code via window global
     const w = window as Window & Record<string, unknown>;
@@ -367,13 +373,33 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       w.botAction = null;
     }
 
-    if (!pendingAction) return;
+    // Periodically check for delayed catch detection even without a pending action
+    // (tickExecutingAction may have timed out before the catch was registered)
+    waitingCheckCounter++;
+    if (!pendingAction) {
+      if (waitingCheckCounter % 10 === 0) {
+        await memory.refresh();
+        const outcome = getBattleOutcome(memory);
+        const currentPartyCount = memory.readU8(ADDR_SAVE_BLOCK_1 + SB1_PARTY_COUNT);
+        const partyGrew = partyCountBeforeThrow > 0 && currentPartyCount > partyCountBeforeThrow;
+        if (outcome === BATTLE_OUTCOME_CAUGHT || partyGrew) {
+          console.log(`[Bot] Caught ${targetName}! (delayed detect: outcome=${outcome}, partyGrew=${partyGrew})`);
+          setStatus('DONE');
+          stop();
+          return;
+        }
+      }
+      return;
+    }
 
-    // Refresh and check if battle ended
+    // Refresh and check if battle ended before executing action
+    waitingCheckCounter = 0;
     await memory.refresh();
     const outcome = getBattleOutcome(memory);
-    if (outcome === BATTLE_OUTCOME_CAUGHT) {
-      console.log(`[Bot] Caught ${targetName}!`);
+    const currentPartyCount = memory.readU8(ADDR_SAVE_BLOCK_1 + SB1_PARTY_COUNT);
+    const partyGrew = partyCountBeforeThrow > 0 && currentPartyCount > partyCountBeforeThrow;
+    if (outcome === BATTLE_OUTCOME_CAUGHT || partyGrew) {
+      console.log(`[Bot] Caught ${targetName}! (pre-action detect: outcome=${outcome}, partyGrew=${partyGrew})`);
       setStatus('DONE');
       stop();
       return;
@@ -424,8 +450,9 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       return;
     }
 
-    // Refresh memory to find ball position in pocket
+    // Refresh memory to find ball position and record party count for catch detection
     await memory.refresh();
+    partyCountBeforeThrow = memory.readU8(ADDR_SAVE_BLOCK_1 + SB1_PARTY_COUNT);
     const slotIndex = getBallSlotIndex(memory, ballType);
     if (slotIndex < 0) {
       error = `No ${ballType} found in bag`;
@@ -481,6 +508,20 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       if (waitCounter % 5 === 0) {
         emulator.buttonPress('B');
         setTimeout(() => emulator.buttonUnpress('B'), PRESS_DURATION);
+
+        // Check for catch/outcome periodically during phase 2 (every 10 ticks)
+        if (waitCounter % 10 === 0) {
+          await memory.refresh();
+          const earlyOutcome = getBattleOutcome(memory);
+          const earlyPartyCount = memory.readU8(ADDR_SAVE_BLOCK_1 + SB1_PARTY_COUNT);
+          const earlyPartyGrew = partyCountBeforeThrow > 0 && earlyPartyCount > partyCountBeforeThrow;
+          if (earlyOutcome === BATTLE_OUTCOME_CAUGHT || earlyPartyGrew) {
+            console.log(`[Bot] Caught ${targetName}! (early detect: outcome=${earlyOutcome}, partyGrew=${earlyPartyGrew})`);
+            setStatus('DONE');
+            stop();
+            return;
+          }
+        }
       }
       return;
     }
@@ -489,8 +530,13 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     await memory.refresh();
     const outcome = getBattleOutcome(memory);
 
-    if (outcome === BATTLE_OUTCOME_CAUGHT) {
-      console.log(`[Bot] Caught ${targetName}!`);
+    // Detect catch via gBattleOutcome OR party count increase
+    // (gBattleOutcome address may be wrong for EU ROM, party count is reliable)
+    const currentPartyCount = memory.readU8(ADDR_SAVE_BLOCK_1 + SB1_PARTY_COUNT);
+    const partyGrew = partyCountBeforeThrow > 0 && currentPartyCount > partyCountBeforeThrow;
+
+    if (outcome === BATTLE_OUTCOME_CAUGHT || partyGrew) {
+      console.log(`[Bot] Caught ${targetName}! (outcome=${outcome}, partyGrew=${partyGrew})`);
       setStatus('DONE');
       stop();
       return;
@@ -515,6 +561,13 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     // Check if battle ended (back to overworld)
     const gameState = readGameState(memory);
     if (gameState.screen.type === 'overworld') {
+      // On overworld after a ball throw with party grew — catch!
+      if (partyGrew) {
+        console.log(`[Bot] Caught ${targetName}! (detected via party count on overworld)`);
+        setStatus('DONE');
+        stop();
+        return;
+      }
       console.log('[Bot] Back to overworld after action, resuming walk');
       lastBattleFingerprint = getBattleFingerprint(memory);
       await pressButtonN('B', TEXT_DISMISS_COUNT);
@@ -527,6 +580,16 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     await pressButtonN('B', TEXT_DISMISS_COUNT);
     await delay(MENU_READINESS_WAIT);
     await memory.refresh();
+
+    // One more party count check after the extra delay
+    const finalPartyCount = memory.readU8(ADDR_SAVE_BLOCK_1 + SB1_PARTY_COUNT);
+    if (partyCountBeforeThrow > 0 && finalPartyCount > partyCountBeforeThrow) {
+      console.log(`[Bot] Caught ${targetName}! (detected via party count after delay)`);
+      setStatus('DONE');
+      stop();
+      return;
+    }
+
     setStatus('WAITING_FOR_DECISION');
   }
 

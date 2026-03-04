@@ -134,9 +134,18 @@ So even catch rate 255 at full HP is only ~33%. You must lower HP and/or apply s
 () => { window.botAction = { type: "throw_ball", ballType: "pokeball" }; return "Action set: throw pokeball"; }
 ```
 
-After setting the action, **tell the user what you did and why** (e.g. "Using Tackle to lower HP — catch probability is only 33%, need it higher"), then resume monitoring. The bot will execute the action and return to WAITING_FOR_DECISION for the next turn, or transition to DONE if the catch succeeds.
+After setting the action, **tell the user what you did and why** (e.g. "Using Tackle to lower HP — catch probability is only 33%, need it higher"), then wait ~12 seconds and check status.
 
-**If status goes from EXECUTING_ACTION → WALKING**: The wild Pokemon fainted (or the battle ended another way). Report this to the user and keep monitoring — the bot will resume searching automatically.
+### Interpreting Post-Action Status
+
+After an action executes, check `window.botStatus`:
+
+- **DONE** → Catch succeeded! Go to Completion.
+- **WAITING_FOR_DECISION** → You're back in battle. If you threw a ball, **the catch failed** (ball broke out). Read the battle state and decide the next action — throw again or attack first. Tell the user (e.g. "Ball broke out! Still at 13/22 HP, throwing another Poke Ball...").
+- **EXECUTING_ACTION** → Still processing. Wait a few more seconds and check again.
+- **WALKING** → The wild Pokemon fainted or the battle ended. Report this to the user and keep monitoring — the bot will resume searching automatically.
+
+**Do NOT try to verify catches by reading battle state data** (HP, ball count, etc.) — battle data in memory is stale after the battle ends and will mislead you. The ONLY reliable indicator is `window.botStatus`.
 
 ## Completion
 
