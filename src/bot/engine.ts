@@ -382,7 +382,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     const action = pendingAction;
     pendingAction = null;
     setStatus('EXECUTING_ACTION');
-    executeAction(action);
+    await executeAction(action);
   }
 
   async function executeAction(action: BotAction) {
@@ -526,6 +526,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     // Still in battle, no decisive outcome — dismiss remaining text and wait for next decision
     await pressButtonN('B', TEXT_DISMISS_COUNT);
     await delay(MENU_READINESS_WAIT);
+    await memory.refresh();
     setStatus('WAITING_FOR_DECISION');
   }
 

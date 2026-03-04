@@ -17,6 +17,7 @@ export interface WildPokemon {
   hp: number;
   maxHp: number;
   status: string;
+  catchRate: number;
 }
 
 export interface PlayerPokemon {

@@ -1,6 +1,6 @@
 import type { MemoryReader } from './memory.ts';
 import type { BagState, BattleState, MoveSlot, PlayerPokemon, WildPokemon } from './types.ts';
-import { getSpeciesName, internalToNational } from './pokemon-db.ts';
+import { getCatchRate, getSpeciesName, internalToNational } from './pokemon-db.ts';
 
 /**
  * Pokemon Ruby/Sapphire memory addresses.
@@ -190,6 +190,7 @@ export function readWildPokemon(mem: MemoryReader, skipBattleCheck = false): Wil
     hp: mem.readU16(base + BATTLE_MON_HP),
     maxHp,
     status: decodeStatus(mem.readU32(base + BATTLE_MON_STATUS)),
+    catchRate: getCatchRate(nationalId),
   };
 }
 
