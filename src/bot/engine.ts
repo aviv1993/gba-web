@@ -12,6 +12,9 @@ import {
   BATTLE_OUTCOME_LOST,
   ADDR_SAVE_BLOCK_1,
   SB1_PARTY_COUNT,
+  ADDR_CURRENT_BAG_POCKET,
+  BAG_POCKET_BALLS,
+  BAG_POCKET_COUNT,
 } from './game-data.ts';
 import { readGameState } from './game-state.ts';
 
@@ -64,8 +67,6 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
   let runRetryCount = 0;
   /** Fingerprint of the last battle's gBattleMons data, used to detect NEW battles. */
   let lastBattleFingerprint: string | null = null;
-  /** Whether this is the first time opening the bag in the current battle. */
-  let firstBagOpenThisBattle = true;
   /** Party count before throwing a ball, used to detect catches. */
   let partyCountBeforeThrow = 0;
 
@@ -137,7 +138,6 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     error = null;
     pendingAction = null;
     lastBattleFingerprint = null;
-    firstBagOpenThisBattle = true;
 
     const ok = await memory.init();
     if (!ok) {
@@ -296,8 +296,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
 
     if (wild.species === targetSpeciesId) {
       console.log(`[Bot] Target ${targetName} found!`);
-      firstBagOpenThisBattle = true;
-      setStatus('WAITING_FOR_DECISION');
+        setStatus('WAITING_FOR_DECISION');
     } else {
       runRetryCount = 0;
       setStatus('RUNNING');
@@ -478,12 +477,20 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
 
     await delay(BAG_OPEN_WAIT);
 
-    // On first bag open this battle, cursor starts on Items pocket — press Right to reach Poke Balls
-    // TODO: fix for bag pocket memory (circular navigation means we can't assume starting position)
-    if (firstBagOpenThisBattle) {
-      await pressButton('Right');
-      await delay(BAG_NAV_WAIT);
-      firstBagOpenThisBattle = false;
+    // Navigate to Poke Balls pocket using memory-based position detection
+    await memory.refresh();
+    const currentPocket = memory.readU8(ADDR_CURRENT_BAG_POCKET);
+    if (currentPocket !== BAG_POCKET_BALLS) {
+      // Circular navigation: compute shortest path (Left or Right)
+      const rightSteps = (BAG_POCKET_BALLS - currentPocket + BAG_POCKET_COUNT) % BAG_POCKET_COUNT;
+      const leftSteps = (currentPocket - BAG_POCKET_BALLS + BAG_POCKET_COUNT) % BAG_POCKET_COUNT;
+      const dir = rightSteps <= leftSteps ? 'Right' : 'Left';
+      const steps = Math.min(rightSteps, leftSteps);
+      console.log(`[Bot] Bag pocket ${currentPocket} → ${BAG_POCKET_BALLS}: ${dir} × ${steps}`);
+      for (let i = 0; i < steps; i++) {
+        await pressButton(dir);
+        await delay(BAG_NAV_WAIT);
+      }
     }
 
     // Reset cursor to top of pocket list

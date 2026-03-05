@@ -50,6 +50,13 @@ export const SB1_BAG_BALLS = 0x600;       // 16 slots (only ~16 ball types exist
 export const SB1_BAG_TMS = 0x740;         // 64 slots
 export const SB1_BAG_BERRIES = 0x840;     // 43 slots
 
+// sCurrentBagPocket — current bag pocket index (0-4)
+// Same address in both US and EU ROMs (empirically validated via EWRAM scan).
+// Pockets: 0=Items, 1=Poke Balls, 2=TMs/HMs, 3=Berries, 4=Key Items
+export const ADDR_CURRENT_BAG_POCKET = 0x02038559;
+export const BAG_POCKET_BALLS = 1;
+export const BAG_POCKET_COUNT = 5;
+
 // Bag pocket sizes (number of item slots)
 export const BAG_ITEMS_SIZE = 20;
 export const BAG_KEY_ITEMS_SIZE = 20;

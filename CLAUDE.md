@@ -65,7 +65,7 @@ The `/catch <pokemon>` skill automates catching a specific Pokemon in Pokemon Ru
 - `src/bot/` — Bot engine (state machine), memory reader, game data (Ruby/Sapphire addresses), Pokemon DB (Gen 3)
 - `src/hooks/use-bot.ts` — React hook exposing `window.startBot()`, `window.stopBot()`, `window.setBotAction()`, `window.getBotState()`
 - `src/components/BotControls.tsx` — Status indicator shown when bot is active
-- `skills/catch-pokemon.md` — Claude Code skill prompt for `/catch`
+- `.claude/skills/catch/SKILL.md` — Claude Code skill prompt for `/catch`
 
 The bot walks on grass autonomously at 4x speed (zero LLM cost). When the target Pokemon appears, it pauses and exposes battle state as text via `window.botState`. Claude Code reads this text, decides an action (attack/throw ball), and injects it via `window.botAction`.
 
