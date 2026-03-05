@@ -7,6 +7,7 @@ const IDLE_STATE: BotState = {
   status: 'IDLE',
   targetName: '',
   encounterCount: 0,
+  lastEncounterName: null,
   battleState: null,
   error: null,
 };

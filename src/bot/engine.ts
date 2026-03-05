@@ -6,7 +6,15 @@ import {
   readWildPokemon,
   getBattleOutcome,
   getBattleFingerprint,
+  getBallSlotIndex,
   BATTLE_OUTCOME_CAUGHT,
+  BATTLE_OUTCOME_WON,
+  BATTLE_OUTCOME_LOST,
+  ADDR_SAVE_BLOCK_1,
+  SB1_PARTY_COUNT,
+  ADDR_CURRENT_BAG_POCKET,
+  BAG_POCKET_BALLS,
+  BAG_POCKET_COUNT,
 } from './game-data.ts';
 import { readGameState } from './game-state.ts';
 
@@ -46,6 +54,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
   let targetName = '';
   let targetSpeciesId = 0;
   let encounterCount = 0;
+  let lastEncounterName: string | null = null;
   let error: string | null = null;
   let pendingAction: BotAction | null = null;
   let tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -58,15 +67,22 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
   let runRetryCount = 0;
   /** Fingerprint of the last battle's gBattleMons data, used to detect NEW battles. */
   let lastBattleFingerprint: string | null = null;
+  /** Party count before throwing a ball, used to detect catches. */
+  let partyCountBeforeThrow = 0;
 
   function getState(): BotState {
     const battleState = (status === 'WAITING_FOR_DECISION' || status === 'EXECUTING_ACTION')
       ? readBattleState(memory, true)
       : null;
+    // Hide masterball from exposed state so Claude never tries to use it
+    if (battleState) {
+      battleState.bag.masterball = 0;
+    }
     return {
       status,
       targetName,
       encounterCount,
+      lastEncounterName,
       battleState,
       error,
     };
@@ -118,6 +134,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     targetName = name;
     targetSpeciesId = speciesId;
     encounterCount = 0;
+    lastEncounterName = null;
     error = null;
     pendingAction = null;
     lastBattleFingerprint = null;
@@ -217,8 +234,9 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
 
       if (fingerprintChanged || screenIsBattle) {
         console.log(`[Bot] Battle detected (fingerprint=${fingerprintChanged}, screen=${screenIsBattle})`);
-        setSpeedMultiplier(previousSpeed);
         battleEnterRetries = 0;
+        partyCountBeforeThrow = 0;
+        waitingCheckCounter = 0;
         setStatus('BATTLE_ENTERING');
         return;
       }
@@ -275,6 +293,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     }
 
     encounterCount++;
+    lastEncounterName = `${wild.name} Lv.${wild.level}`;
     console.log(`[Bot] Encounter #${encounterCount}: ${wild.name} Lv.${wild.level}`);
 
     if (wild.species === targetSpeciesId) {
@@ -348,6 +367,27 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     }
   }
 
+  let waitingCheckCounter = 0;
+
+  /** Check if the Pokemon was caught (via battle outcome or party count increase). */
+  function checkCaught(): { caught: boolean; outcome: number; partyGrew: boolean } {
+    const outcome = getBattleOutcome(memory);
+    const currentPartyCount = memory.readU8(ADDR_SAVE_BLOCK_1 + SB1_PARTY_COUNT);
+    const partyGrew = partyCountBeforeThrow > 0 && currentPartyCount > partyCountBeforeThrow;
+    return { caught: outcome === BATTLE_OUTCOME_CAUGHT || partyGrew, outcome, partyGrew };
+  }
+
+  /** If caught, log, set DONE, stop, and return true. */
+  function handleCaughtIfDetected(context: string): boolean {
+    const { caught, outcome, partyGrew } = checkCaught();
+    if (caught) {
+      console.log(`[Bot] Caught ${targetName}! (${context}: outcome=${outcome}, partyGrew=${partyGrew})`);
+      setStatus('DONE');
+      stop();
+    }
+    return caught;
+  }
+
   async function tickWaitingForDecision() {
     // Check for action from Claude Code via window global
     const w = window as Window & Record<string, unknown>;
@@ -357,22 +397,26 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       w.botAction = null;
     }
 
-    if (!pendingAction) return;
-
-    // Refresh and check if battle ended
-    await memory.refresh();
-    const outcome = getBattleOutcome(memory);
-    if (outcome === BATTLE_OUTCOME_CAUGHT) {
-      console.log(`[Bot] Caught ${targetName}!`);
-      setStatus('DONE');
-      stop();
+    // Periodically check for delayed catch detection even without a pending action
+    // (tickExecutingAction may have timed out before the catch was registered)
+    waitingCheckCounter++;
+    if (!pendingAction) {
+      if (waitingCheckCounter % 10 === 0) {
+        await memory.refresh();
+        if (handleCaughtIfDetected('delayed detect')) return;
+      }
       return;
     }
+
+    // Refresh and check if battle ended before executing action
+    waitingCheckCounter = 0;
+    await memory.refresh();
+    if (handleCaughtIfDetected('pre-action detect')) return;
 
     const action = pendingAction;
     pendingAction = null;
     setStatus('EXECUTING_ACTION');
-    executeAction(action);
+    await executeAction(action);
   }
 
   async function executeAction(action: BotAction) {
@@ -386,6 +430,10 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
   }
 
   async function executeMoveAction(moveIndex: number) {
+    // Dismiss any lingering text before navigating menu
+    await pressButtonN('B', TEXT_DISMISS_COUNT);
+    await delay(MENU_READINESS_WAIT);
+
     await pressButton('A'); // Select Fight
 
     // Navigate to correct move slot (0-3)
@@ -402,44 +450,136 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     await pressButton('A'); // Select the move
   }
 
-  async function executeThrowBall(ballType: string) {
-    console.log(`[Bot] Throwing ${ballType}`);
+  /** Navigate to the Poke Balls pocket from whatever pocket the bag is currently on.
+   *  Caller must have called memory.refresh() before invoking this. */
+  async function navigateToBagPocketBalls() {
+    const currentPocket = memory.readU8(ADDR_CURRENT_BAG_POCKET);
+    if (currentPocket === BAG_POCKET_BALLS) return;
 
-    // Navigate to Bag from battle menu
-    await pressButton('Right');
-    await pressButton('A'); // Open Bag
+    // Circular navigation: compute shortest path (Left or Right)
+    const rightSteps = (BAG_POCKET_BALLS - currentPocket + BAG_POCKET_COUNT) % BAG_POCKET_COUNT;
+    const leftSteps = (currentPocket - BAG_POCKET_BALLS + BAG_POCKET_COUNT) % BAG_POCKET_COUNT;
+    const dir = rightSteps <= leftSteps ? 'Right' : 'Left';
+    const steps = Math.min(rightSteps, leftSteps);
+    console.log(`[Bot] Bag pocket ${currentPocket} → ${BAG_POCKET_BALLS}: ${dir} × ${steps}`);
+    for (let i = 0; i < steps; i++) {
+      await pressButton(dir);
+      await delay(BAG_NAV_WAIT);
+    }
+  }
+
+  async function executeThrowBall(ballType: string) {
+    // Block Master Ball usage — reserved for special occasions
+    if (ballType === 'masterball') {
+      console.warn('[Bot] Master Ball usage blocked — staying in WAITING_FOR_DECISION');
+      setStatus('WAITING_FOR_DECISION');
+      return;
+    }
+
+    // Refresh memory to find ball position and record party count for catch detection
+    await memory.refresh();
+    partyCountBeforeThrow = memory.readU8(ADDR_SAVE_BLOCK_1 + SB1_PARTY_COUNT);
+    const slotIndex = getBallSlotIndex(memory, ballType);
+    if (slotIndex < 0) {
+      error = `No ${ballType} found in bag`;
+      setStatus('ERROR');
+      stop();
+      return;
+    }
+    console.log(`[Bot] Throwing ${ballType} (slot ${slotIndex})`);
+
+    // Dismiss any lingering text and wait for menu readiness
+    await pressButtonN('B', TEXT_DISMISS_COUNT);
+    await delay(MENU_READINESS_WAIT);
+
+    // Battle menu: FIGHT BAG / POKEMON RUN
+    // Navigate to BAG (top-right) with clamped navigation
+    await pressButtonN('Up', 2);
+    await pressButtonN('Right', 2);
+    await pressButton('A');
 
     await delay(BAG_OPEN_WAIT);
+    await navigateToBagPocketBalls();
 
-    // Navigate to Poke Balls pocket (one right from Items)
-    await pressButton('Right');
+    // Reset cursor to top of pocket list
+    await pressButtonN('Up', 10);
     await delay(BAG_NAV_WAIT);
+
+    // Navigate down to target ball slot
+    for (let i = 0; i < slotIndex; i++) {
+      await pressButton('Down');
+    }
 
     await pressButton('A'); // Select the ball
     await delay(BAG_NAV_WAIT);
-    await pressButton('A'); // Confirm "Use" option
+    await pressButton('A'); // Confirm "Use"
   }
 
   async function tickExecutingAction() {
     waitCounter--;
-    if (waitCounter > 0) return;
 
-    // Refresh and check battle outcome
+    // Phase 1 (first ~5s / 50 ticks): Pure wait, let animation play
+    // Phase 2 (next ~3s / 30 ticks): Press B to dismiss result text
+    const PHASE2_START = 20; // ticks remaining when phase 2 begins
+    if (waitCounter > PHASE2_START) return;
+
+    if (waitCounter > 0) {
+      // Phase 2: press B every few ticks to dismiss text
+      if (waitCounter % 5 === 0) {
+        emulator.buttonPress('B');
+        setTimeout(() => emulator.buttonUnpress('B'), PRESS_DURATION);
+
+        // Check for catch/outcome periodically during phase 2 (every 10 ticks)
+        if (waitCounter % 10 === 0) {
+          await memory.refresh();
+          if (handleCaughtIfDetected('early detect')) return;
+        }
+      }
+      return;
+    }
+
+    // Timer expired — refresh and check what happened
     await memory.refresh();
+    if (handleCaughtIfDetected('timer expired')) return;
+
     const outcome = getBattleOutcome(memory);
-    if (outcome === BATTLE_OUTCOME_CAUGHT) {
-      console.log(`[Bot] Caught ${targetName}!`);
-      setStatus('DONE');
+    if (outcome === BATTLE_OUTCOME_WON) {
+      console.log('[Bot] Wild Pokemon fainted, resuming walk');
+      lastBattleFingerprint = getBattleFingerprint(memory);
+      await pressButtonN('B', TEXT_DISMISS_COUNT);
+      setSpeedMultiplier(4);
+      setStatus('WALKING');
+      return;
+    }
+
+    if (outcome === BATTLE_OUTCOME_LOST) {
+      error = 'Player lost the battle';
+      setStatus('ERROR');
       stop();
       return;
     }
 
-    // Battle still going — advance text and wait for next decision
-    emulator.buttonPress('A');
-    setTimeout(() => {
-      emulator.buttonUnpress('A');
-      setStatus('WAITING_FOR_DECISION');
-    }, PRESS_DURATION);
+    // Check if battle ended (back to overworld)
+    const gameState = readGameState(memory);
+    if (gameState.screen.type === 'overworld') {
+      if (handleCaughtIfDetected('overworld detect')) return;
+      console.log('[Bot] Back to overworld after action, resuming walk');
+      lastBattleFingerprint = getBattleFingerprint(memory);
+      await pressButtonN('B', TEXT_DISMISS_COUNT);
+      setSpeedMultiplier(4);
+      setStatus('WALKING');
+      return;
+    }
+
+    // Still in battle, no decisive outcome — dismiss remaining text and wait for next decision
+    await pressButtonN('B', TEXT_DISMISS_COUNT);
+    await delay(MENU_READINESS_WAIT);
+    await memory.refresh();
+
+    // One more catch check after the extra delay
+    if (handleCaughtIfDetected('post-delay detect')) return;
+
+    setStatus('WAITING_FOR_DECISION');
   }
 
   return { start, stop, setAction, getState, destroy };

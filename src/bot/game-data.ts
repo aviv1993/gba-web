@@ -1,13 +1,13 @@
 import type { MemoryReader } from './memory.ts';
 import type { BagState, BattleState, MoveSlot, PlayerPokemon, WildPokemon } from './types.ts';
-import { getSpeciesName, internalToNational } from './pokemon-db.ts';
+import { getCatchRate, getSpeciesName, internalToNational } from './pokemon-db.ts';
 
 /**
  * Pokemon Ruby/Sapphire memory addresses.
  * Source: pret/pokeruby symbol map (https://github.com/pret/pokeruby/tree/symbols)
  *
- * These addresses are from the decompilation project and apply to
- * both US and EU versions of Ruby/Sapphire.
+ * Addresses validated against the EU ROM: "2006 - Pokemon Ruby (E)(Independent)".
+ * Some addresses (gSaveBlock1, gMain) differ from the US ROM.
  */
 
 // --- EWRAM addresses ---
@@ -50,6 +50,13 @@ export const SB1_BAG_BALLS = 0x600;       // 16 slots (only ~16 ball types exist
 export const SB1_BAG_TMS = 0x740;         // 64 slots
 export const SB1_BAG_BERRIES = 0x840;     // 43 slots
 
+// sCurrentBagPocket — current bag pocket index (0-4)
+// Same address in both US and EU ROMs (empirically validated via EWRAM scan).
+// Pockets: 0=Items, 1=Poke Balls, 2=TMs/HMs, 3=Berries, 4=Key Items
+export const ADDR_CURRENT_BAG_POCKET = 0x02038559;
+export const BAG_POCKET_BALLS = 1;
+export const BAG_POCKET_COUNT = 5;
+
 // Bag pocket sizes (number of item slots)
 export const BAG_ITEMS_SIZE = 20;
 export const BAG_KEY_ITEMS_SIZE = 20;
@@ -77,10 +84,10 @@ const ADDR_BAG_BALLS_POCKET = ADDR_SAVE_BLOCK_1 + SB1_BAG_BALLS;
 const BAG_BALLS_POCKET_SIZE = BAG_BALLS_SIZE;
 
 // Item IDs for Pokeballs
-const ITEM_POKEBALL = 4;
-const ITEM_GREATBALL = 3;
-const ITEM_ULTRABALL = 2;
-const ITEM_MASTERBALL = 1;
+export const ITEM_POKEBALL = 4;
+export const ITEM_GREATBALL = 3;
+export const ITEM_ULTRABALL = 2;
+export const ITEM_MASTERBALL = 1;
 
 // gBattleOutcome
 const ADDR_BATTLE_OUTCOME = 0x02024D26;
@@ -182,7 +189,6 @@ export function readWildPokemon(mem: MemoryReader, skipBattleCheck = false): Wil
 
   const nationalId = internalToNational(internalSpecies);
   const name = getSpeciesName(nationalId) ?? `#${nationalId}`;
-
   return {
     species: nationalId,
     name,
@@ -190,6 +196,7 @@ export function readWildPokemon(mem: MemoryReader, skipBattleCheck = false): Wil
     hp: mem.readU16(base + BATTLE_MON_HP),
     maxHp,
     status: decodeStatus(mem.readU32(base + BATTLE_MON_STATUS)),
+    catchRate: getCatchRate(nationalId),
   };
 }
 
@@ -258,6 +265,34 @@ export function readBattleState(mem: MemoryReader, skipBattleCheck = false): Bat
   if (!wild || !player) return null;
   const bag = readBag(mem);
   return { wild, player, bag };
+}
+
+/** Map ball type string to item ID. */
+export function ballTypeToItemId(ballType: string): number {
+  switch (ballType) {
+    case 'pokeball': return ITEM_POKEBALL;
+    case 'greatball': return ITEM_GREATBALL;
+    case 'ultraball': return ITEM_ULTRABALL;
+    case 'masterball': return ITEM_MASTERBALL;
+    default: return -1;
+  }
+}
+
+/**
+ * Find the 0-based display index of a ball type in the Balls pocket.
+ * Returns -1 if the ball type is not in the pocket.
+ */
+export function getBallSlotIndex(mem: MemoryReader, ballType: string): number {
+  const targetItemId = ballTypeToItemId(ballType);
+  if (targetItemId < 0) return -1;
+
+  for (let i = 0; i < BAG_BALLS_POCKET_SIZE; i++) {
+    const addr = ADDR_BAG_BALLS_POCKET + i * 4;
+    const itemId = mem.readU16(addr);
+    if (itemId === 0) break; // end of pocket
+    if (itemId === targetItemId) return i;
+  }
+  return -1;
 }
 
 /**

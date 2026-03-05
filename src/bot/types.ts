@@ -17,6 +17,7 @@ export interface WildPokemon {
   hp: number;
   maxHp: number;
   status: string;
+  catchRate: number;
 }
 
 export interface PlayerPokemon {
@@ -54,13 +55,14 @@ export interface BotState {
   status: BotStatus;
   targetName: string;
   encounterCount: number;
+  lastEncounterName: string | null;
   battleState: BattleState | null;
   error: string | null;
 }
 
 export type BotAction =
   | { type: 'use_move'; moveIndex: number }
-  | { type: 'throw_ball'; ballType: 'pokeball' | 'greatball' | 'ultraball' | 'masterball' };
+  | { type: 'throw_ball'; ballType: 'pokeball' | 'greatball' | 'ultraball' };
 
 // --- Game State Model ---
 
