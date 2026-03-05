@@ -445,6 +445,24 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     await pressButton('A'); // Select the move
   }
 
+  /** Navigate to the Poke Balls pocket from whatever pocket the bag is currently on. */
+  async function navigateToBagPocketBalls() {
+    await memory.refresh();
+    const currentPocket = memory.readU8(ADDR_CURRENT_BAG_POCKET);
+    if (currentPocket === BAG_POCKET_BALLS) return;
+
+    // Circular navigation: compute shortest path (Left or Right)
+    const rightSteps = (BAG_POCKET_BALLS - currentPocket + BAG_POCKET_COUNT) % BAG_POCKET_COUNT;
+    const leftSteps = (currentPocket - BAG_POCKET_BALLS + BAG_POCKET_COUNT) % BAG_POCKET_COUNT;
+    const dir = rightSteps <= leftSteps ? 'Right' : 'Left';
+    const steps = Math.min(rightSteps, leftSteps);
+    console.log(`[Bot] Bag pocket ${currentPocket} → ${BAG_POCKET_BALLS}: ${dir} × ${steps}`);
+    for (let i = 0; i < steps; i++) {
+      await pressButton(dir);
+      await delay(BAG_NAV_WAIT);
+    }
+  }
+
   async function executeThrowBall(ballType: string) {
     // Block Master Ball usage — reserved for special occasions
     if (ballType === 'masterball') {
@@ -476,22 +494,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     await pressButton('A');
 
     await delay(BAG_OPEN_WAIT);
-
-    // Navigate to Poke Balls pocket using memory-based position detection
-    await memory.refresh();
-    const currentPocket = memory.readU8(ADDR_CURRENT_BAG_POCKET);
-    if (currentPocket !== BAG_POCKET_BALLS) {
-      // Circular navigation: compute shortest path (Left or Right)
-      const rightSteps = (BAG_POCKET_BALLS - currentPocket + BAG_POCKET_COUNT) % BAG_POCKET_COUNT;
-      const leftSteps = (currentPocket - BAG_POCKET_BALLS + BAG_POCKET_COUNT) % BAG_POCKET_COUNT;
-      const dir = rightSteps <= leftSteps ? 'Right' : 'Left';
-      const steps = Math.min(rightSteps, leftSteps);
-      console.log(`[Bot] Bag pocket ${currentPocket} → ${BAG_POCKET_BALLS}: ${dir} × ${steps}`);
-      for (let i = 0; i < steps; i++) {
-        await pressButton(dir);
-        await delay(BAG_NAV_WAIT);
-      }
-    }
+    await navigateToBagPocketBalls();
 
     // Reset cursor to top of pocket list
     await pressButtonN('Up', 10);
