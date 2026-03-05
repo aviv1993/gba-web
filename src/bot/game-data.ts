@@ -6,8 +6,8 @@ import { getCatchRate, getSpeciesName, internalToNational } from './pokemon-db.t
  * Pokemon Ruby/Sapphire memory addresses.
  * Source: pret/pokeruby symbol map (https://github.com/pret/pokeruby/tree/symbols)
  *
- * These addresses are from the decompilation project and apply to
- * both US and EU versions of Ruby/Sapphire.
+ * Addresses validated against the EU ROM: "2006 - Pokemon Ruby (E)(Independent)".
+ * Some addresses (gSaveBlock1, gMain) differ from the US ROM.
  */
 
 // --- EWRAM addresses ---
@@ -182,7 +182,6 @@ export function readWildPokemon(mem: MemoryReader, skipBattleCheck = false): Wil
 
   const nationalId = internalToNational(internalSpecies);
   const name = getSpeciesName(nationalId) ?? `#${nationalId}`;
-
   return {
     species: nationalId,
     name,

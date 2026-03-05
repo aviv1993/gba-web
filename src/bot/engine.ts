@@ -51,6 +51,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
   let targetName = '';
   let targetSpeciesId = 0;
   let encounterCount = 0;
+  let lastEncounterName: string | null = null;
   let error: string | null = null;
   let pendingAction: BotAction | null = null;
   let tickTimer: ReturnType<typeof setInterval> | null = null;
@@ -80,6 +81,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       status,
       targetName,
       encounterCount,
+      lastEncounterName,
       battleState,
       error,
     };
@@ -131,6 +133,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     targetName = name;
     targetSpeciesId = speciesId;
     encounterCount = 0;
+    lastEncounterName = null;
     error = null;
     pendingAction = null;
     lastBattleFingerprint = null;
@@ -288,6 +291,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     }
 
     encounterCount++;
+    lastEncounterName = `${wild.name} Lv.${wild.level}`;
     console.log(`[Bot] Encounter #${encounterCount}: ${wild.name} Lv.${wild.level}`);
 
     if (wild.species === targetSpeciesId) {
@@ -475,6 +479,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     await delay(BAG_OPEN_WAIT);
 
     // On first bag open this battle, cursor starts on Items pocket — press Right to reach Poke Balls
+    // TODO: fix for bag pocket memory (circular navigation means we can't assume starting position)
     if (firstBagOpenThisBattle) {
       await pressButton('Right');
       await delay(BAG_NAV_WAIT);

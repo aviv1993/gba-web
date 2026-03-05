@@ -55,6 +55,7 @@ export interface BotState {
   status: BotStatus;
   targetName: string;
   encounterCount: number;
+  lastEncounterName: string | null;
   battleState: BattleState | null;
   error: string | null;
 }
