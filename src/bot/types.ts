@@ -1,5 +1,7 @@
 import type { mGBAEmulator } from '../core/use-emulator.ts';
 
+export type BotMode = 'catch' | 'train';
+
 export type BotStatus =
   | 'IDLE'
   | 'WALKING'
@@ -7,8 +9,20 @@ export type BotStatus =
   | 'RUNNING'
   | 'WAITING_FOR_DECISION'
   | 'EXECUTING_ACTION'
+  | 'SWITCHING'
+  | 'ATTACKING'
+  | 'PAUSED'
   | 'DONE'
   | 'ERROR';
+
+export interface TrainingState {
+  traineeSlot: number;
+  koerSlot: number;
+  startLevel: number;
+  currentLevel: number;
+  targetLevel: number | null;
+  battlesWon: number;
+}
 
 export interface WildPokemon {
   species: number;
@@ -53,11 +67,14 @@ export interface BattleState {
 
 export interface BotState {
   status: BotStatus;
+  mode: BotMode;
   targetName: string;
   encounterCount: number;
   lastEncounterName: string | null;
   battleState: BattleState | null;
   error: string | null;
+  trainingState: TrainingState | null;
+  pauseReason: string | null;
 }
 
 export type BotAction =
@@ -111,6 +128,8 @@ export interface GameState {
 
 export interface BotEngine {
   start(targetName: string): void;
+  startTraining(options: { targetLevel?: number }): void;
+  resumeTraining(): void;
   stop(): void;
   setAction(action: BotAction): void;
   getState(): BotState;

@@ -79,7 +79,7 @@ function readLocation(mem: MemoryReader): Location {
   return { mapGroup, mapNum, mapName, x, y };
 }
 
-function readParty(mem: MemoryReader): PartyOverview[] {
+export function readParty(mem: MemoryReader): PartyOverview[] {
   const sb1 = ADDR_SAVE_BLOCK_1;
   const count = mem.readU8(sb1 + SB1_PARTY_COUNT);
   const partyBase = sb1 + SB1_PARTY;

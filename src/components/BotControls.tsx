@@ -5,7 +5,37 @@ interface BotControlsProps {
   onStop: () => void;
 }
 
+function trainingProgress(state: BotState): string {
+  const ts = state.trainingState;
+  if (!ts) return '';
+  const levelStr = ts.targetLevel
+    ? `Lv.${ts.currentLevel}→${ts.targetLevel}`
+    : `Lv.${ts.currentLevel}`;
+  return `${levelStr} | ${ts.battlesWon} battles won`;
+}
+
 function statusText(state: BotState): string {
+  if (state.mode === 'train') {
+    switch (state.status) {
+      case 'WALKING':
+        return `Training ${trainingProgress(state)} — searching...`;
+      case 'BATTLE_ENTERING':
+        return 'Battle starting...';
+      case 'SWITCHING':
+        return 'Switching to KO\'er...';
+      case 'ATTACKING':
+        return 'Attacking wild Pokemon...';
+      case 'PAUSED':
+        return `Paused: ${state.pauseReason ?? 'unknown reason'}`;
+      case 'DONE':
+        return `Training complete! ${trainingProgress(state)}`;
+      case 'ERROR':
+        return `Error: ${state.error}`;
+      default:
+        return '';
+    }
+  }
+
   switch (state.status) {
     case 'WALKING':
       return `Searching for ${state.targetName}... (${state.encounterCount} encounters)`;
