@@ -16,8 +16,6 @@ export type BotStatus =
   | 'ERROR';
 
 export interface TrainingState {
-  traineeSlot: number;
-  koerSlot: number;
   direct: boolean;
   startLevel: number;
   currentLevel: number;

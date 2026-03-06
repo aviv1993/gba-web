@@ -147,6 +147,36 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     return new Promise(r => setTimeout(r, ms));
   }
 
+  /** Record current battle fingerprint, restore speed, and resume walking. */
+  function resumeWalking() {
+    lastBattleFingerprint = getBattleFingerprint(memory);
+    setSpeedMultiplier(4);
+    setStatus('WALKING');
+  }
+
+  /** Shared initialization for both catch and train modes. Returns false on failure. */
+  async function initBot(): Promise<boolean> {
+    encounterCount = 0;
+    lastEncounterName = null;
+    error = null;
+    pendingAction = null;
+    lastBattleFingerprint = null;
+    pauseReason = null;
+
+    const ok = await memory.init();
+    if (!ok) {
+      error = 'Failed to initialize memory reader. Make sure a ROM is loaded and running.';
+      setStatus('ERROR');
+      return false;
+    }
+
+    await memory.refresh();
+    lastBattleFingerprint = getBattleFingerprint(memory);
+    previousSpeed = emulator.getFastForwardMultiplier();
+    setSpeedMultiplier(4);
+    return true;
+  }
+
   async function start(name: string) {
     const speciesId = getSpeciesId(name);
     if (!speciesId) {
@@ -155,28 +185,11 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       return;
     }
 
+    mode = 'catch';
     targetName = name;
     targetSpeciesId = speciesId;
-    encounterCount = 0;
-    lastEncounterName = null;
-    error = null;
-    pendingAction = null;
-    lastBattleFingerprint = null;
 
-    const ok = await memory.init();
-    if (!ok) {
-      error = 'Failed to initialize memory reader. Make sure a ROM is loaded and running.';
-      setStatus('ERROR');
-      return;
-    }
-
-    // Take initial snapshot so we can detect changes (stale battle data from previous encounters)
-    await memory.refresh();
-    lastBattleFingerprint = getBattleFingerprint(memory);
-
-    // Save current speed and enable fast forward
-    previousSpeed = emulator.getFastForwardMultiplier();
-    setSpeedMultiplier(4);
+    if (!await initBot()) return;
 
     setStatus('WALKING');
     tickTimer = setInterval(tick, TICK_INTERVAL);
@@ -304,9 +317,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     if (gameState.screen.type !== 'battle') {
       if (battleEnterRetries >= BATTLE_ENTER_WAIT) {
         console.log('[Bot] Battle transition timed out, resuming walk');
-        lastBattleFingerprint = getBattleFingerprint(memory);
-        setSpeedMultiplier(4);
-        setStatus('WALKING');
+        resumeWalking();
       }
       return;
     }
@@ -315,9 +326,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     if (!wild) {
       if (battleEnterRetries >= BATTLE_ENTER_WAIT) {
         console.log('[Bot] In battle but no valid wild data, resuming walk');
-        lastBattleFingerprint = getBattleFingerprint(memory);
-        setSpeedMultiplier(4);
-        setStatus('WALKING');
+        resumeWalking();
       }
       return;
     }
@@ -406,11 +415,9 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       const gameState = readGameState(memory);
 
       if (gameState.screen.type === 'overworld') {
-        lastBattleFingerprint = getBattleFingerprint(memory);
         console.log('[Bot] Run complete (overworld detected), resuming walk');
         await pressButtonN('B', TEXT_DISMISS_COUNT);
-        setSpeedMultiplier(4);
-        setStatus('WALKING');
+        resumeWalking();
         return;
       }
 
@@ -418,11 +425,9 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       // (handles "Can't escape!" by retrying quickly once the menu reappears)
       if (waitCounter <= 0) {
         if (runRetryCount >= RUN_MAX_RETRIES) {
-          lastBattleFingerprint = getBattleFingerprint(memory);
           console.log('[Bot] Run max retries exceeded, resuming walk');
           await pressButtonN('B', TEXT_DISMISS_COUNT);
-          setSpeedMultiplier(4);
-          setStatus('WALKING');
+          resumeWalking();
           return;
         }
         runRetryCount++;
@@ -613,10 +618,8 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     const outcome = getBattleOutcome(memory);
     if (outcome === BATTLE_OUTCOME_WON) {
       console.log('[Bot] Wild Pokemon fainted, resuming walk');
-      lastBattleFingerprint = getBattleFingerprint(memory);
       await pressButtonN('B', TEXT_DISMISS_COUNT);
-      setSpeedMultiplier(4);
-      setStatus('WALKING');
+      resumeWalking();
       return;
     }
 
@@ -632,10 +635,8 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     if (gameState.screen.type === 'overworld') {
       if (handleCaughtIfDetected('overworld detect')) return;
       console.log('[Bot] Back to overworld after action, resuming walk');
-      lastBattleFingerprint = getBattleFingerprint(memory);
       await pressButtonN('B', TEXT_DISMISS_COUNT);
-      setSpeedMultiplier(4);
-      setStatus('WALKING');
+      resumeWalking();
       return;
     }
 
@@ -654,21 +655,8 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     mode = 'train';
     targetName = '';
     targetSpeciesId = 0;
-    encounterCount = 0;
-    lastEncounterName = null;
-    error = null;
-    pendingAction = null;
-    lastBattleFingerprint = null;
-    pauseReason = null;
 
-    const ok = await memory.init();
-    if (!ok) {
-      error = 'Failed to initialize memory reader. Make sure a ROM is loaded and running.';
-      setStatus('ERROR');
-      return;
-    }
-
-    await memory.refresh();
+    if (!await initBot()) return;
 
     const direct = options.direct ?? false;
     const party = readParty(memory);
@@ -695,8 +683,6 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     }
 
     trainingState = {
-      traineeSlot: 0,
-      koerSlot: direct ? 0 : 1,
       direct,
       startLevel: trainee.level,
       currentLevel: trainee.level,
@@ -705,10 +691,6 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     };
 
     console.log(`[Bot] Training started (${direct ? 'direct' : 'switch'}): Lv.${trainee.level}${options.targetLevel ? ` → Lv.${options.targetLevel}` : ''}`);
-
-    lastBattleFingerprint = getBattleFingerprint(memory);
-    previousSpeed = emulator.getFastForwardMultiplier();
-    setSpeedMultiplier(4);
 
     setStatus('WALKING');
     tickTimer = setInterval(tick, TICK_INTERVAL);
@@ -743,9 +725,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     }
 
     pauseReason = null;
-    lastBattleFingerprint = getBattleFingerprint(memory);
-    setSpeedMultiplier(4);
-    setStatus('WALKING');
+    resumeWalking();
   }
 
   async function executeSwitch() {
@@ -788,9 +768,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     if (gameState.screen.type === 'overworld') {
       // Wild fled (Roar/Teleport/Whirlwind)
       console.log('[Bot] Wild fled during switch, resuming walk');
-      lastBattleFingerprint = getBattleFingerprint(memory);
-      setSpeedMultiplier(4);
-      setStatus('WALKING');
+      resumeWalking();
       return;
     }
 
@@ -799,8 +777,8 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     await executeKoerAttack();
   }
 
-  async function executeKoerAttack() {
-    await memory.refresh();
+  async function executeKoerAttack(skipRefresh = false) {
+    if (!skipRefresh) await memory.refresh();
     const player = readPlayerPokemon(memory, true);
     if (!player) {
       error = 'Cannot read active Pokemon data';
@@ -900,14 +878,13 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     console.log('[Bot] Still in battle, attacking again');
     await pressButtonN('B', TEXT_DISMISS_COUNT);
     await delay(MENU_READINESS_WAIT);
-    await executeKoerAttack();
+    await executeKoerAttack(true); // memory already refreshed this tick
   }
 
   async function handleTrainingBattleWon() {
     if (!trainingState) return;
 
     trainingState.battlesWon++;
-    lastBattleFingerprint = getBattleFingerprint(memory);
 
     const party = readParty(memory);
     const trainee = party.find(p => p.slot === 0);
@@ -924,8 +901,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       return;
     }
 
-    setSpeedMultiplier(4);
-    setStatus('WALKING');
+    resumeWalking();
   }
 
   async function getLocation(): Promise<{ mapName: string; x: number; y: number } | null> {
@@ -936,10 +912,11 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     return { mapName: gameState.location.mapName, x: gameState.location.x, y: gameState.location.y };
   }
 
-  async function getParty(): Promise<{ slot: number; level: number; hp: number; maxHp: number; status: string }[] | null> {
+  /** Read party data. If memory was already refreshed (e.g. by getLocation), pass skipRefresh=true. */
+  async function getParty(skipRefresh = false): Promise<{ slot: number; level: number; hp: number; maxHp: number; status: string }[] | null> {
     const ok = await memory.init();
     if (!ok) return null;
-    await memory.refresh();
+    if (!skipRefresh) await memory.refresh();
     return readParty(memory);
   }
 

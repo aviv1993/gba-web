@@ -45,8 +45,8 @@ If the user specifies `direct` or `switch`, use that mode. Otherwise, auto-detec
 3. Check the current location and party (must be sequential — both use the same memory reader).
 Do NOT load save states — the browser auto-loads the most recent cloud save on startup, so the game is already in the correct state:
 ```js
-// browser_evaluate
-() => window.getLocation().then(loc => window.getParty().then(party => JSON.stringify({ location: loc, party })))
+// browser_evaluate — getParty(true) skips redundant memory refresh since getLocation() already did one
+() => window.getLocation().then(loc => window.getParty(true).then(party => JSON.stringify({ location: loc, party })))
 ```
 
 This returns:

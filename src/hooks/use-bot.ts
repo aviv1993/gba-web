@@ -57,7 +57,7 @@ export function useBot() {
       eng.resumeTraining();
     };
     w.getLocation = () => eng.getLocation();
-    w.getParty = () => eng.getParty();
+    w.getParty = (skipRefresh?: boolean) => eng.getParty(skipRefresh);
     w.loadSaveState = (slot: number) => emulator.loadState(slot);
 
     return () => {
