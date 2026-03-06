@@ -28,6 +28,8 @@ const BATTLE_MON_PP1 = 0x24;           // u8
 const BATTLE_MON_PP2 = 0x25;           // u8
 const BATTLE_MON_PP3 = 0x26;           // u8
 const BATTLE_MON_PP4 = 0x27;           // u8
+const BATTLE_MON_TYPE1 = 0x21;         // u8 — primary type
+const BATTLE_MON_TYPE2 = 0x22;         // u8 — secondary type
 const BATTLE_MON_HP = 0x28;            // u16
 const BATTLE_MON_LEVEL = 0x2A;         // u8
 const BATTLE_MON_MAX_HP = 0x2C;        // u16
@@ -40,8 +42,11 @@ export const ADDR_SAVE_BLOCK_1 = 0x02025734;
 // SaveBlock1 field offsets
 export const SB1_POS = 0x00;              // Coords16: s16 x, s16 y
 export const SB1_LOCATION = 0x04;         // WarpData: s8 mapGroup, s8 mapNum, s8 warpId, s16 x, s16 y
-export const SB1_PARTY_COUNT = 0x234;     // u8 — number of Pokemon in party (0-6)
-export const SB1_PARTY = 0x238;           // Pokemon[6] — 100 bytes each
+// Party data is NOT inside SaveBlock1 — it's in standalone IWRAM globals.
+// gPlayerPartyCount: 0x03004350, gPlayerParty: 0x03004360 (from pret/pokeruby symbol map).
+// Same address in both US and EU ROMs (IWRAM layout is identical).
+export const ADDR_PARTY_COUNT = 0x03004350;  // u8 — number of Pokemon in party (0-6)
+export const ADDR_PARTY = 0x03004360;        // Pokemon[6] — 100 bytes each
 export const SB1_MONEY = 0x490;           // u32
 // Bag pockets (ItemSlot = u16 itemId + u16 quantity = 4 bytes each)
 export const SB1_BAG_ITEMS = 0x560;       // 20 slots
@@ -171,6 +176,60 @@ export function getBattleFingerprint(mem: MemoryReader): string {
 /** Get the battle outcome (0 = ongoing). */
 export function getBattleOutcome(mem: MemoryReader): number {
   return mem.readU8(ADDR_BATTLE_OUTCOME);
+}
+
+// Gen 3 type IDs (from pret/pokeruby include/pokemon.h)
+const TYPE_NORMAL = 0;
+const TYPE_FIGHTING = 1;
+const TYPE_FLYING = 2;
+const TYPE_POISON = 3;
+const TYPE_GROUND = 4;
+const TYPE_ROCK = 5;
+const TYPE_BUG = 6;
+const TYPE_GHOST = 7;
+const TYPE_STEEL = 8;
+const TYPE_FIRE = 10;
+const TYPE_WATER = 11;
+const TYPE_GRASS = 12;
+const TYPE_ELECTRIC = 13;
+const TYPE_PSYCHIC = 14;
+const TYPE_ICE = 15;
+const TYPE_DRAGON = 16;
+const TYPE_DARK = 17;
+
+const MOVE_TYPE_TO_ID: Record<string, number> = {
+  Normal: TYPE_NORMAL, Fighting: TYPE_FIGHTING, Flying: TYPE_FLYING,
+  Poison: TYPE_POISON, Ground: TYPE_GROUND, Rock: TYPE_ROCK,
+  Bug: TYPE_BUG, Ghost: TYPE_GHOST, Steel: TYPE_STEEL,
+  Fire: TYPE_FIRE, Water: TYPE_WATER, Grass: TYPE_GRASS,
+  Electric: TYPE_ELECTRIC, Psychic: TYPE_PSYCHIC, Ice: TYPE_ICE,
+  Dragon: TYPE_DRAGON, Dark: TYPE_DARK,
+};
+
+// Immunities: moveType → set of defending types that are immune
+const IMMUNITIES = new Map<number, Set<number>>([
+  [TYPE_NORMAL, new Set([TYPE_GHOST])],
+  [TYPE_FIGHTING, new Set([TYPE_GHOST])],
+  [TYPE_GROUND, new Set([TYPE_FLYING])],
+  [TYPE_ELECTRIC, new Set([TYPE_GROUND])],
+  [TYPE_PSYCHIC, new Set([TYPE_DARK])],
+  [TYPE_GHOST, new Set([TYPE_NORMAL])],
+  [TYPE_POISON, new Set([TYPE_STEEL])],
+]);
+
+/** Read the enemy Pokemon's types from gBattleMons. */
+export function readEnemyTypes(mem: MemoryReader): [number, number] {
+  const base = ADDR_BATTLE_MONS + BATTLE_MON_SIZE;
+  return [mem.readU8(base + BATTLE_MON_TYPE1), mem.readU8(base + BATTLE_MON_TYPE2)];
+}
+
+/** Check if a move type is immune against the given defending types. */
+export function isMoveImmune(moveType: string, enemyTypes: [number, number]): boolean {
+  const atkTypeId = MOVE_TYPE_TO_ID[moveType];
+  if (atkTypeId === undefined) return false;
+  const immuneSet = IMMUNITIES.get(atkTypeId);
+  if (!immuneSet) return false;
+  return immuneSet.has(enemyTypes[0]) || immuneSet.has(enemyTypes[1]);
 }
 
 /** Read wild/enemy Pokemon battle data. */

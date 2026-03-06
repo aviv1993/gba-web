@@ -5,11 +5,14 @@ import type { BotState, BotAction } from '../bot/types.ts';
 
 const IDLE_STATE: BotState = {
   status: 'IDLE',
+  mode: 'catch',
   targetName: '',
   encounterCount: 0,
   lastEncounterName: null,
   battleState: null,
   error: null,
+  trainingState: null,
+  pauseReason: null,
 };
 
 export function useBot() {
@@ -47,6 +50,15 @@ export function useBot() {
       eng.setAction(action);
     };
     w.getBotState = () => eng.getState();
+    w.startTraining = (options?: { targetLevel?: number; direct?: boolean }) => {
+      eng.startTraining(options ?? {});
+    };
+    w.resumeTraining = () => {
+      eng.resumeTraining();
+    };
+    w.getLocation = () => eng.getLocation();
+    w.getParty = () => eng.getParty();
+    w.loadSaveState = (slot: number) => emulator.loadState(slot);
 
     return () => {
       eng.destroy();
@@ -55,6 +67,11 @@ export function useBot() {
       delete w.stopBot;
       delete w.setBotAction;
       delete w.getBotState;
+      delete w.startTraining;
+      delete w.resumeTraining;
+      delete w.getLocation;
+      delete w.getParty;
+      delete w.loadSaveState;
     };
   }, [emulator, romLoaded, setSpeed]);
 

@@ -1,22 +1,24 @@
-import type { BotAction, BotState, BotStatus, Emulator } from './types.ts';
+import type { BotAction, BotMode, BotState, BotStatus, Emulator, TrainingState } from './types.ts';
 import { MemoryReader } from './memory.ts';
 import { getSpeciesId } from './pokemon-db.ts';
 import {
   readBattleState,
   readWildPokemon,
+  readPlayerPokemon,
   getBattleOutcome,
   getBattleFingerprint,
   getBallSlotIndex,
+  readEnemyTypes,
+  isMoveImmune,
   BATTLE_OUTCOME_CAUGHT,
   BATTLE_OUTCOME_WON,
   BATTLE_OUTCOME_LOST,
-  ADDR_SAVE_BLOCK_1,
-  SB1_PARTY_COUNT,
+  ADDR_PARTY_COUNT,
   ADDR_CURRENT_BAG_POCKET,
   BAG_POCKET_BALLS,
   BAG_POCKET_COUNT,
 } from './game-data.ts';
-import { readGameState } from './game-state.ts';
+import { readGameState, readParty } from './game-state.ts';
 
 /** Button press duration in ms */
 const PRESS_DURATION = 80;
@@ -46,11 +48,26 @@ const RUN_MAX_RETRIES = 3;
 const BAG_OPEN_WAIT = 500;
 /** Ms to wait between bag navigation steps */
 const BAG_NAV_WAIT = 200;
+/** KO'er HP threshold — pause if below this fraction of maxHP */
+const KOER_HP_THRESHOLD = 0.2;
+/** Ms to wait for party screen to open */
+const PARTY_SCREEN_WAIT = 800;
+/** Ms to wait for switch confirmation */
+const SWITCH_CONFIRM_WAIT = 400;
+/** Ticks to wait for switch animation */
+const SWITCH_ANIM_WAIT = 60;
+/** Ticks to wait for attack animation */
+const ATTACK_ANIM_WAIT = 60;
+/** Ms to wait for post-battle text */
+const POST_BATTLE_TEXT_WAIT = 1500;
+/** Ms to wait after post-battle text for level-up/evolution check */
+const POST_BATTLE_CHECK_WAIT = 2000;
 
 export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: number) => void) {
   const memory = new MemoryReader(emulator);
 
   let status: BotStatus = 'IDLE';
+  let mode: BotMode = 'catch';
   let targetName = '';
   let targetSpeciesId = 0;
   let encounterCount = 0;
@@ -69,6 +86,10 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
   let lastBattleFingerprint: string | null = null;
   /** Party count before throwing a ball, used to detect catches. */
   let partyCountBeforeThrow = 0;
+  /** Training mode state. */
+  let trainingState: TrainingState | null = null;
+  /** Reason for PAUSED status. */
+  let pauseReason: string | null = null;
 
   function getState(): BotState {
     const battleState = (status === 'WAITING_FOR_DECISION' || status === 'EXECUTING_ACTION')
@@ -80,11 +101,14 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     }
     return {
       status,
+      mode,
       targetName,
       encounterCount,
       lastEncounterName,
       battleState,
       error,
+      trainingState,
+      pauseReason,
     };
   }
 
@@ -207,6 +231,12 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
         case 'EXECUTING_ACTION':
           await tickExecutingAction();
           break;
+        case 'SWITCHING':
+          await tickSwitching();
+          break;
+        case 'ATTACKING':
+          await tickAttacking();
+          break;
       }
     } catch (err) {
       console.error('[Bot] Tick error:', err);
@@ -296,7 +326,45 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     lastEncounterName = `${wild.name} Lv.${wild.level}`;
     console.log(`[Bot] Encounter #${encounterCount}: ${wild.name} Lv.${wild.level}`);
 
-    if (wild.species === targetSpeciesId) {
+    if (mode === 'train') {
+      if (trainingState?.direct) {
+        // Direct training: check trainee HP, then attack directly
+        const party = readParty(memory);
+        const trainee = party.find(p => p.slot === 0);
+        if (!trainee || trainee.hp === 0) {
+          error = 'Trainee fainted';
+          setStatus('ERROR');
+          stop();
+          return;
+        }
+        if (trainee.hp / trainee.maxHp < KOER_HP_THRESHOLD) {
+          pauseReason = `Trainee HP low (${trainee.hp}/${trainee.maxHp}) — heal before continuing`;
+          console.log(`[Bot] ${pauseReason}`);
+          setStatus('PAUSED');
+          return;
+        }
+        setStatus('ATTACKING');
+        await executeKoerAttack();
+      } else {
+        // Switch training: check KO'er HP, then switch
+        const party = readParty(memory);
+        const koer = party.find(p => p.slot === 1);
+        if (!koer || koer.hp === 0) {
+          error = "KO'er (slot 1) is fainted";
+          setStatus('ERROR');
+          stop();
+          return;
+        }
+        if (koer.hp / koer.maxHp < KOER_HP_THRESHOLD) {
+          pauseReason = `KO'er HP low (${koer.hp}/${koer.maxHp}) — heal before continuing`;
+          console.log(`[Bot] ${pauseReason}`);
+          setStatus('PAUSED');
+          return;
+        }
+        setStatus('SWITCHING');
+        await executeSwitch();
+      }
+    } else if (wild.species === targetSpeciesId) {
       console.log(`[Bot] Target ${targetName} found!`);
       setStatus('WAITING_FOR_DECISION');
     } else {
@@ -372,7 +440,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
   /** Check if the Pokemon was caught (via battle outcome or party count increase). */
   function checkCaught(): { caught: boolean; outcome: number; partyGrew: boolean } {
     const outcome = getBattleOutcome(memory);
-    const currentPartyCount = memory.readU8(ADDR_SAVE_BLOCK_1 + SB1_PARTY_COUNT);
+    const currentPartyCount = memory.readU8(ADDR_PARTY_COUNT);
     const partyGrew = partyCountBeforeThrow > 0 && currentPartyCount > partyCountBeforeThrow;
     return { caught: outcome === BATTLE_OUTCOME_CAUGHT || partyGrew, outcome, partyGrew };
   }
@@ -478,7 +546,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
 
     // Refresh memory to find ball position and record party count for catch detection
     await memory.refresh();
-    partyCountBeforeThrow = memory.readU8(ADDR_SAVE_BLOCK_1 + SB1_PARTY_COUNT);
+    partyCountBeforeThrow = memory.readU8(ADDR_PARTY_COUNT);
     const slotIndex = getBallSlotIndex(memory, ballType);
     if (slotIndex < 0) {
       error = `No ${ballType} found in bag`;
@@ -582,5 +650,299 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     setStatus('WAITING_FOR_DECISION');
   }
 
-  return { start, stop, setAction, getState, destroy };
+  async function startTraining(options: { targetLevel?: number; direct?: boolean }) {
+    mode = 'train';
+    targetName = '';
+    targetSpeciesId = 0;
+    encounterCount = 0;
+    lastEncounterName = null;
+    error = null;
+    pendingAction = null;
+    lastBattleFingerprint = null;
+    pauseReason = null;
+
+    const ok = await memory.init();
+    if (!ok) {
+      error = 'Failed to initialize memory reader. Make sure a ROM is loaded and running.';
+      setStatus('ERROR');
+      return;
+    }
+
+    await memory.refresh();
+
+    const direct = options.direct ?? false;
+    const party = readParty(memory);
+
+    const trainee = party.find(p => p.slot === 0);
+    if (!trainee) {
+      error = 'No Pokemon in slot 0';
+      setStatus('ERROR');
+      return;
+    }
+
+    if (!direct) {
+      if (party.length < 2) {
+        error = 'Need at least 2 Pokemon in party (trainee slot 0, KO\'er slot 1)';
+        setStatus('ERROR');
+        return;
+      }
+      const koer = party.find(p => p.slot === 1);
+      if (!koer || koer.hp === 0) {
+        error = 'KO\'er (slot 1) is fainted or missing';
+        setStatus('ERROR');
+        return;
+      }
+    }
+
+    trainingState = {
+      traineeSlot: 0,
+      koerSlot: direct ? 0 : 1,
+      direct,
+      startLevel: trainee.level,
+      currentLevel: trainee.level,
+      targetLevel: options.targetLevel ?? null,
+      battlesWon: 0,
+    };
+
+    console.log(`[Bot] Training started (${direct ? 'direct' : 'switch'}): Lv.${trainee.level}${options.targetLevel ? ` → Lv.${options.targetLevel}` : ''}`);
+
+    lastBattleFingerprint = getBattleFingerprint(memory);
+    previousSpeed = emulator.getFastForwardMultiplier();
+    setSpeedMultiplier(4);
+
+    setStatus('WALKING');
+    tickTimer = setInterval(tick, TICK_INTERVAL);
+  }
+
+  async function resumeTraining() {
+    if (mode !== 'train' || status !== 'PAUSED') {
+      console.warn('[Bot] resumeTraining called but not in PAUSED train mode');
+      return;
+    }
+
+    await memory.refresh();
+    const gameState = readGameState(memory);
+    if (gameState.screen.type !== 'overworld') {
+      console.warn('[Bot] Cannot resume — not on overworld. Handle the prompt first.');
+      return;
+    }
+
+    // Re-read trainee level (may have changed due to evolution/level-up)
+    const party = readParty(memory);
+    const trainee = party.find(p => p.slot === 0);
+    if (trainee && trainingState) {
+      trainingState.currentLevel = trainee.level;
+      console.log(`[Bot] Resumed training. Trainee level: ${trainee.level}`);
+
+      if (trainingState.targetLevel && trainee.level >= trainingState.targetLevel) {
+        console.log(`[Bot] Target level ${trainingState.targetLevel} reached!`);
+        setStatus('DONE');
+        stop();
+        return;
+      }
+    }
+
+    pauseReason = null;
+    lastBattleFingerprint = getBattleFingerprint(memory);
+    setSpeedMultiplier(4);
+    setStatus('WALKING');
+  }
+
+  async function executeSwitch() {
+    // Dismiss text + wait for menu
+    await pressButtonN('B', TEXT_DISMISS_COUNT);
+    await delay(MENU_READINESS_WAIT);
+
+    // Battle menu: FIGHT BAG / POKEMON RUN
+    // Navigate to POKEMON (bottom-left) with clamped nav
+    await pressButtonN('Down', 3);
+    await pressButtonN('Left', 3);
+    await pressButton('A');
+
+    await delay(PARTY_SCREEN_WAIT);
+
+    // Party screen: slot 0 is selected by default (top-left)
+    // Move right to slot 1
+    await pressButton('Right');
+    await pressButton('A'); // Select slot 1
+    await delay(SWITCH_CONFIRM_WAIT);
+    await pressButton('A'); // Confirm "SHIFT"
+
+    waitCounter = SWITCH_ANIM_WAIT;
+  }
+
+  async function tickSwitching() {
+    waitCounter--;
+
+    // Press B to dismiss "Go! [Pokemon]!" text
+    if (waitCounter > 0 && waitCounter % 5 === 0) {
+      emulator.buttonPress('B');
+      setTimeout(() => emulator.buttonUnpress('B'), PRESS_DURATION);
+    }
+
+    if (waitCounter > 0) return;
+
+    await memory.refresh();
+    const gameState = readGameState(memory);
+
+    if (gameState.screen.type === 'overworld') {
+      // Wild fled (Roar/Teleport/Whirlwind)
+      console.log('[Bot] Wild fled during switch, resuming walk');
+      lastBattleFingerprint = getBattleFingerprint(memory);
+      setSpeedMultiplier(4);
+      setStatus('WALKING');
+      return;
+    }
+
+    // Switch complete — attack with KO'er
+    setStatus('ATTACKING');
+    await executeKoerAttack();
+  }
+
+  async function executeKoerAttack() {
+    await memory.refresh();
+    const player = readPlayerPokemon(memory, true);
+    if (!player) {
+      error = 'Cannot read active Pokemon data';
+      setStatus('ERROR');
+      stop();
+      return;
+    }
+
+    const enemyTypes = readEnemyTypes(memory);
+    const bestIdx = selectBestMove(player.moves, enemyTypes);
+    if (bestIdx < 0) {
+      error = 'KO\'er has no usable moves (all out of PP, status-only, or immune)';
+      setStatus('ERROR');
+      stop();
+      return;
+    }
+
+    console.log(`[Bot] Attacking with ${player.moves[bestIdx].name} (power ${player.moves[bestIdx].power})`);
+    await executeMoveAction(bestIdx);
+    waitCounter = ATTACK_ANIM_WAIT;
+  }
+
+  function selectBestMove(moves: { power: number; pp: number; type: string }[], enemyTypes: [number, number]): number {
+    let bestIdx = -1;
+    let bestPower = -1;
+    for (let i = 0; i < moves.length; i++) {
+      if (moves[i].pp > 0 && moves[i].power > 0 && !isMoveImmune(moves[i].type, enemyTypes)) {
+        if (moves[i].power > bestPower) {
+          bestPower = moves[i].power;
+          bestIdx = i;
+        }
+      }
+    }
+    return bestIdx;
+  }
+
+  async function tickAttacking() {
+    waitCounter--;
+
+    // Phase 2: press B to dismiss result text
+    const PHASE2_START = 20;
+    if (waitCounter > PHASE2_START) return;
+
+    if (waitCounter > 0) {
+      if (waitCounter % 5 === 0) {
+        emulator.buttonPress('B');
+        setTimeout(() => emulator.buttonUnpress('B'), PRESS_DURATION);
+      }
+      return;
+    }
+
+    // Timer expired — check outcome
+    await memory.refresh();
+    const outcome = getBattleOutcome(memory);
+    const gameState = readGameState(memory);
+
+    if (outcome === BATTLE_OUTCOME_LOST) {
+      error = 'Player lost the battle';
+      setStatus('ERROR');
+      stop();
+      return;
+    }
+
+    if (outcome === BATTLE_OUTCOME_WON || gameState.screen.type === 'overworld') {
+      // Battle won — dismiss post-battle text carefully
+      console.log('[Bot] Battle won, dismissing post-battle text');
+      await pressButtonN('B', 3);
+      await delay(POST_BATTLE_TEXT_WAIT);
+      await pressButtonN('B', 2);
+      await delay(POST_BATTLE_CHECK_WAIT);
+
+      await memory.refresh();
+      const postState = readGameState(memory);
+
+      if (postState.screen.type === 'overworld') {
+        // Clean exit — update training state
+        await handleTrainingBattleWon();
+      } else {
+        // Something is blocking — evolution or move-learn prompt
+        pauseReason = 'Level-up event detected — handle evolution/move prompt, then call window.resumeTraining()';
+        console.log(`[Bot] ${pauseReason}`);
+        setStatus('PAUSED');
+      }
+      return;
+    }
+
+    // Still in battle — check if active Pokemon fainted
+    const player = readPlayerPokemon(memory, true);
+    if (player && player.hp === 0) {
+      error = trainingState?.direct ? 'Pokemon fainted during battle' : 'KO\'er fainted during battle';
+      setStatus('ERROR');
+      stop();
+      return;
+    }
+
+    // Multi-turn KO: dismiss text and attack again
+    console.log('[Bot] Still in battle, attacking again');
+    await pressButtonN('B', TEXT_DISMISS_COUNT);
+    await delay(MENU_READINESS_WAIT);
+    await executeKoerAttack();
+  }
+
+  async function handleTrainingBattleWon() {
+    if (!trainingState) return;
+
+    trainingState.battlesWon++;
+    lastBattleFingerprint = getBattleFingerprint(memory);
+
+    const party = readParty(memory);
+    const trainee = party.find(p => p.slot === 0);
+    if (trainee) {
+      trainingState.currentLevel = trainee.level;
+    }
+
+    console.log(`[Bot] Battle won (#${trainingState.battlesWon}). Trainee level: ${trainingState.currentLevel}`);
+
+    if (trainingState.targetLevel && trainingState.currentLevel >= trainingState.targetLevel) {
+      console.log(`[Bot] Target level ${trainingState.targetLevel} reached!`);
+      setStatus('DONE');
+      stop();
+      return;
+    }
+
+    setSpeedMultiplier(4);
+    setStatus('WALKING');
+  }
+
+  async function getLocation(): Promise<{ mapName: string; x: number; y: number } | null> {
+    const ok = await memory.init();
+    if (!ok) return null;
+    await memory.refresh();
+    const gameState = readGameState(memory);
+    return { mapName: gameState.location.mapName, x: gameState.location.x, y: gameState.location.y };
+  }
+
+  async function getParty(): Promise<{ slot: number; level: number; hp: number; maxHp: number; status: string }[] | null> {
+    const ok = await memory.init();
+    if (!ok) return null;
+    await memory.refresh();
+    return readParty(memory);
+  }
+
+
+  return { start, startTraining, resumeTraining, stop, setAction, getState, getLocation, getParty, destroy };
 }
