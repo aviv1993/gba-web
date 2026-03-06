@@ -178,22 +178,28 @@ export function useSaves(emulator: mGBAEmulator | null, gameName: string | null)
     }
 
     const url = `${API_BASE}/${encodeURIComponent(gameName)}/${AUTO_SLOT}`;
+    let lastAutoSaveTime = 0;
+
+    function autoSave(reason: string) {
+      // Debounce: visibilitychange and beforeunload can fire in quick succession
+      const now = Date.now();
+      if (now - lastAutoSaveTime < 1000) return;
+      lastAutoSaveTime = now;
+
+      const data = getAutoSaveData();
+      if (data) {
+        navigator.sendBeacon(url, new Blob([data], { type: 'application/octet-stream' }));
+        console.log(`Auto-saved to cloud slot 0 (${reason})`);
+      }
+    }
 
     const onVisChange = () => {
       if (!document.hidden) return;
-      const data = getAutoSaveData();
-      if (data) {
-        navigator.sendBeacon(url, new Blob([data], { type: 'application/octet-stream' }));
-        console.log('Auto-saved to cloud slot 0 (visibility)');
-      }
+      autoSave('visibility');
     };
 
     const onBeforeUnload = () => {
-      const data = getAutoSaveData();
-      if (data) {
-        navigator.sendBeacon(url, new Blob([data], { type: 'application/octet-stream' }));
-        console.log('Auto-saved to cloud slot 0 (unload)');
-      }
+      autoSave('unload');
     };
 
     document.addEventListener('visibilitychange', onVisChange);

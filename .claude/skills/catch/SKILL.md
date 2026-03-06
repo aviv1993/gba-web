@@ -169,6 +169,6 @@ If the user wants to stop, or something goes wrong:
 
 - The bot runs at 4x speed while searching and during battles.
 - Memory addresses are for Pokemon Ruby/Sapphire (US). Other games may not work.
-- The bot walks up and down — the player must already be standing on or near grass.
+- The bot walks up and down — the player must be in an area with random encounters (grass, caves, water).
 - If memory reading fails, the bot will report an ERROR status.
 - Each monitoring check is very cheap (text only, no screenshots needed).

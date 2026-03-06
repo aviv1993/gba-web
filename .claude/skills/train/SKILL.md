@@ -45,8 +45,8 @@ If the user specifies `direct` or `switch`, use that mode. Otherwise, auto-detec
 3. Check the current location and party (must be sequential — both use the same memory reader).
 Do NOT load save states — the browser auto-loads the most recent cloud save on startup, so the game is already in the correct state:
 ```js
-// browser_evaluate
-() => window.getLocation().then(loc => window.getParty().then(party => JSON.stringify({ location: loc, party })))
+// browser_evaluate — getParty(true) skips redundant memory refresh since getLocation() already did one
+() => window.getLocation().then(loc => window.getParty(true).then(party => JSON.stringify({ location: loc, party })))
 ```
 
 This returns:
@@ -156,4 +156,4 @@ If the user wants to stop:
 - **Switch mode**: trainee earns half EXP (Gen 3 switch-training mechanic). **Direct mode**: trainee earns full EXP.
 - If the active Pokemon runs out of PP or faints, the bot will ERROR. The user needs to heal at a Pokemon Center.
 - Memory addresses are for Pokemon Ruby/Sapphire. Other games may not work.
-- The player must already be standing on or near grass.
+- The player must be in an area with random encounters (grass, caves, water).
