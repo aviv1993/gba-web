@@ -50,7 +50,7 @@ export function useBot() {
       eng.setAction(action);
     };
     w.getBotState = () => eng.getState();
-    w.startTraining = (options?: { targetLevel?: number }) => {
+    w.startTraining = (options?: { targetLevel?: number; direct?: boolean }) => {
       eng.startTraining(options ?? {});
     };
     w.resumeTraining = () => {

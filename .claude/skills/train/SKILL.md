@@ -1,21 +1,33 @@
 ---
 name: train
-description: Train a Pokemon via switch-training in Pokemon Ruby/Sapphire
+description: Train a Pokemon via switch-training or direct training in Pokemon Ruby/Sapphire
 user-invocable: true
-argument: [target_level]
+argument: [direct] [target_level]
 ---
 
-# /train — Pokemon Switch-Training Bot
+# /train — Pokemon Training Bot
 
-You are monitoring a switch-training bot in a GBA emulator running in a browser. The bot walks grass, encounters wilds, switches the trainee (slot 0) out to the KO'er (slot 1), KOs with the strongest move, and repeats. The bot is fully autonomous — you do NOT make per-battle decisions. Your job is to start the bot, monitor progress, and handle pause/resume events.
+You are monitoring a training bot in a GBA emulator running in a browser. The bot walks grass, encounters wilds, and defeats them to gain EXP. Two modes are supported:
+
+- **Switch training** (default): Slot 0 (trainee) enters battle, switches to slot 1 (KO'er) who defeats the wild. Trainee earns half EXP.
+- **Direct training** (`/train direct [level]`): Slot 0 fights directly — no switching. Full EXP.
+
+The bot is fully autonomous — you do NOT make per-battle decisions. Your job is to start the bot, monitor progress, and handle pause/resume events.
 
 **IMPORTANT**: Keep the user informed. Output a short status update every time you check the bot state.
 
 ## Prerequisites
 
-The user must arrange their party before starting:
-- **Slot 0 (first)**: Trainee — the weak Pokemon to level up
-- **Slot 1 (second)**: KO'er — a strong Pokemon that can one-shot wild encounters
+- **Slot 0 (first)**: The Pokemon to train
+- **Slot 1 (second)**: KO'er — a strong Pokemon that can one-shot wilds (only needed for switch mode)
+
+**Argument parsing**: The argument string may contain a strategy keyword (`direct` or `switch`) and/or a target level number. Examples:
+- `/train 15` → auto-detect mode, train to level 15
+- `/train direct 15` → force direct training to level 15
+- `/train switch 15` → force switch training to level 15
+- `/train direct` → force direct training indefinitely
+
+If the user specifies `direct` or `switch`, use that mode. Otherwise, auto-detect the best mode (see Strategy Selection below).
 
 ## Setup
 
@@ -30,15 +42,8 @@ The user must arrange their party before starting:
 () => typeof window.startTraining === 'function'
 ```
 
-3. Try to load saved game from slot 1 (continue if it fails):
-```js
-// browser_evaluate
-() => { const ok = window.loadSaveState(1); return ok ? "Save state 1 loaded" : "No save in slot 1, continuing with current state"; }
-```
-
-If loaded, wait 2 seconds for the game to stabilize before proceeding.
-
-4. Check the current location and party (must be sequential — both use the same memory reader):
+3. Check the current location and party (must be sequential — both use the same memory reader).
+Do NOT load save states — the browser auto-loads the most recent cloud save on startup, so the game is already in the correct state:
 ```js
 // browser_evaluate
 () => window.getLocation().then(loc => window.getParty().then(party => JSON.stringify({ location: loc, party })))
@@ -72,15 +77,27 @@ Slot 0 is the trainee, slot 1 is the KO'er. Use both to advise the user. Wild Po
 | Route 120 | 25-27 |
 | Route 121 | 26-28 |
 
-**Recommendation logic**: Compare the trainee's level (slot 0) to the route's wild levels. Wilds close to or slightly above the trainee's level give the best EXP. If wilds are much higher than the trainee, warn the user — the trainee could get KO'd before switching. If wilds are far below the trainee, EXP will be minimal. Also check the KO'er (slot 1) is healthy (HP not low) and high enough level to one-shot wilds on this route.
+### Strategy Selection
+
+Unless the user explicitly said `direct`, choose the mode automatically based on the trainee level vs wild levels on the current route:
+
+- **Direct training** if slot 0's level is **≥ 5 levels above** the route's max wild level. The trainee can comfortably one-shot or two-shot wilds and earns full EXP.
+- **Switch training** if slot 0's level is **below or close to** the wild levels (within 4 levels above). The trainee is too weak to fight safely — switch to the KO'er. Requires a healthy slot 1.
+- **Warn the user** if the trainee's level is below the wild levels AND you're in switch mode — the trainee might get KO'd before the switch completes. Suggest moving to an easier route.
+- **Warn the user** if there is no slot 1 (or slot 1 is fainted) and switch training is needed.
+
+Example: Trainee Lv18 on Route 116 (wilds Lv6-8) → direct (18 is 10+ levels above). Trainee Lv11 on Route 116 → switch (only 3 levels above max).
+
+Tell the user which mode you chose and why before starting.
 
 5. Start the training bot:
 ```js
 // browser_evaluate
-() => { window.startTraining({ targetLevel: $ARGUMENTS || undefined }); return "Training started"; }
+// For switch training:
+() => { window.startTraining({ targetLevel: <number_or_undefined> }); return "Training started (switch)"; }
+// For direct training:
+() => { window.startTraining({ targetLevel: <number_or_undefined>, direct: true }); return "Training started (direct)"; }
 ```
-
-If `$ARGUMENTS` is empty or not a number, pass `{}` (no target level — trains indefinitely until stopped).
 
 ## Monitoring Loop
 
@@ -136,7 +153,7 @@ If the user wants to stop:
 
 - The bot runs at 4x speed during walking and battles.
 - The bot is fully autonomous — do NOT inject battle actions (`window.botAction`). The bot handles switching and attacking on its own.
-- The trainee earns half EXP from each battle (Gen 3 switch-training mechanic).
-- If the KO'er runs out of PP or faints, the bot will ERROR. The user needs to heal at a Pokemon Center.
+- **Switch mode**: trainee earns half EXP (Gen 3 switch-training mechanic). **Direct mode**: trainee earns full EXP.
+- If the active Pokemon runs out of PP or faints, the bot will ERROR. The user needs to heal at a Pokemon Center.
 - Memory addresses are for Pokemon Ruby/Sapphire. Other games may not work.
 - The player must already be standing on or near grass.

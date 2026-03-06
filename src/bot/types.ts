@@ -18,6 +18,7 @@ export type BotStatus =
 export interface TrainingState {
   traineeSlot: number;
   koerSlot: number;
+  direct: boolean;
   startLevel: number;
   currentLevel: number;
   targetLevel: number | null;
@@ -128,7 +129,7 @@ export interface GameState {
 
 export interface BotEngine {
   start(targetName: string): void;
-  startTraining(options: { targetLevel?: number }): void;
+  startTraining(options: { targetLevel?: number; direct?: boolean }): void;
   resumeTraining(): void;
   stop(): void;
   setAction(action: BotAction): void;

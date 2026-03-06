@@ -8,6 +8,8 @@ import {
   getBattleOutcome,
   getBattleFingerprint,
   getBallSlotIndex,
+  readEnemyTypes,
+  isMoveImmune,
   BATTLE_OUTCOME_CAUGHT,
   BATTLE_OUTCOME_WON,
   BATTLE_OUTCOME_LOST,
@@ -325,23 +327,43 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     console.log(`[Bot] Encounter #${encounterCount}: ${wild.name} Lv.${wild.level}`);
 
     if (mode === 'train') {
-      // Training mode: check KO'er HP, then switch
-      const party = readParty(memory);
-      const koer = party.find(p => p.slot === 1);
-      if (!koer || koer.hp === 0) {
-        error = "KO'er (slot 1) is fainted";
-        setStatus('ERROR');
-        stop();
-        return;
+      if (trainingState?.direct) {
+        // Direct training: check trainee HP, then attack directly
+        const party = readParty(memory);
+        const trainee = party.find(p => p.slot === 0);
+        if (!trainee || trainee.hp === 0) {
+          error = 'Trainee fainted';
+          setStatus('ERROR');
+          stop();
+          return;
+        }
+        if (trainee.hp / trainee.maxHp < KOER_HP_THRESHOLD) {
+          pauseReason = `Trainee HP low (${trainee.hp}/${trainee.maxHp}) — heal before continuing`;
+          console.log(`[Bot] ${pauseReason}`);
+          setStatus('PAUSED');
+          return;
+        }
+        setStatus('ATTACKING');
+        await executeKoerAttack();
+      } else {
+        // Switch training: check KO'er HP, then switch
+        const party = readParty(memory);
+        const koer = party.find(p => p.slot === 1);
+        if (!koer || koer.hp === 0) {
+          error = "KO'er (slot 1) is fainted";
+          setStatus('ERROR');
+          stop();
+          return;
+        }
+        if (koer.hp / koer.maxHp < KOER_HP_THRESHOLD) {
+          pauseReason = `KO'er HP low (${koer.hp}/${koer.maxHp}) — heal before continuing`;
+          console.log(`[Bot] ${pauseReason}`);
+          setStatus('PAUSED');
+          return;
+        }
+        setStatus('SWITCHING');
+        await executeSwitch();
       }
-      if (koer.hp / koer.maxHp < KOER_HP_THRESHOLD) {
-        pauseReason = `KO'er HP low (${koer.hp}/${koer.maxHp}) — heal before continuing`;
-        console.log(`[Bot] ${pauseReason}`);
-        setStatus('PAUSED');
-        return;
-      }
-      setStatus('SWITCHING');
-      await executeSwitch();
     } else if (wild.species === targetSpeciesId) {
       console.log(`[Bot] Target ${targetName} found!`);
       setStatus('WAITING_FOR_DECISION');
@@ -628,7 +650,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     setStatus('WAITING_FOR_DECISION');
   }
 
-  async function startTraining(options: { targetLevel?: number }) {
+  async function startTraining(options: { targetLevel?: number; direct?: boolean }) {
     mode = 'train';
     targetName = '';
     targetSpeciesId = 0;
@@ -648,36 +670,41 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
 
     await memory.refresh();
 
+    const direct = options.direct ?? false;
     const party = readParty(memory);
-    if (party.length < 2) {
-      error = 'Need at least 2 Pokemon in party (trainee slot 0, KO\'er slot 1)';
+
+    const trainee = party.find(p => p.slot === 0);
+    if (!trainee) {
+      error = 'No Pokemon in slot 0';
       setStatus('ERROR');
       return;
     }
 
-    const trainee = party.find(p => p.slot === 0);
-    const koer = party.find(p => p.slot === 1);
-    if (!trainee) {
-      error = 'No Pokemon in slot 0 (trainee)';
-      setStatus('ERROR');
-      return;
-    }
-    if (!koer || koer.hp === 0) {
-      error = 'KO\'er (slot 1) is fainted or missing';
-      setStatus('ERROR');
-      return;
+    if (!direct) {
+      if (party.length < 2) {
+        error = 'Need at least 2 Pokemon in party (trainee slot 0, KO\'er slot 1)';
+        setStatus('ERROR');
+        return;
+      }
+      const koer = party.find(p => p.slot === 1);
+      if (!koer || koer.hp === 0) {
+        error = 'KO\'er (slot 1) is fainted or missing';
+        setStatus('ERROR');
+        return;
+      }
     }
 
     trainingState = {
       traineeSlot: 0,
-      koerSlot: 1,
+      koerSlot: direct ? 0 : 1,
+      direct,
       startLevel: trainee.level,
       currentLevel: trainee.level,
       targetLevel: options.targetLevel ?? null,
       battlesWon: 0,
     };
 
-    console.log(`[Bot] Training started: Lv.${trainee.level}${options.targetLevel ? ` → Lv.${options.targetLevel}` : ''}`);
+    console.log(`[Bot] Training started (${direct ? 'direct' : 'switch'}): Lv.${trainee.level}${options.targetLevel ? ` → Lv.${options.targetLevel}` : ''}`);
 
     lastBattleFingerprint = getBattleFingerprint(memory);
     previousSpeed = emulator.getFastForwardMultiplier();
@@ -782,9 +809,10 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       return;
     }
 
-    const bestIdx = selectBestMove(player.moves);
+    const enemyTypes = readEnemyTypes(memory);
+    const bestIdx = selectBestMove(player.moves, enemyTypes);
     if (bestIdx < 0) {
-      error = 'KO\'er has no usable moves (all out of PP or status-only)';
+      error = 'KO\'er has no usable moves (all out of PP, status-only, or immune)';
       setStatus('ERROR');
       stop();
       return;
@@ -795,13 +823,15 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     waitCounter = ATTACK_ANIM_WAIT;
   }
 
-  function selectBestMove(moves: { power: number; pp: number }[]): number {
+  function selectBestMove(moves: { power: number; pp: number; type: string }[], enemyTypes: [number, number]): number {
     let bestIdx = -1;
     let bestPower = -1;
     for (let i = 0; i < moves.length; i++) {
-      if (moves[i].pp > 0 && moves[i].power > bestPower) {
-        bestPower = moves[i].power;
-        bestIdx = i;
+      if (moves[i].pp > 0 && moves[i].power > 0 && !isMoveImmune(moves[i].type, enemyTypes)) {
+        if (moves[i].power > bestPower) {
+          bestPower = moves[i].power;
+          bestIdx = i;
+        }
       }
     }
     return bestIdx;
@@ -857,10 +887,10 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       return;
     }
 
-    // Still in battle — check if KO'er fainted
+    // Still in battle — check if active Pokemon fainted
     const player = readPlayerPokemon(memory, true);
     if (player && player.hp === 0) {
-      error = 'KO\'er fainted during battle';
+      error = trainingState?.direct ? 'Pokemon fainted during battle' : 'KO\'er fainted during battle';
       setStatus('ERROR');
       stop();
       return;

@@ -22,7 +22,7 @@ function statusText(state: BotState): string {
       case 'BATTLE_ENTERING':
         return 'Battle starting...';
       case 'SWITCHING':
-        return 'Switching to KO\'er...';
+        return state.trainingState?.direct ? 'Attacking...' : 'Switching to KO\'er...';
       case 'ATTACKING':
         return 'Attacking wild Pokemon...';
       case 'PAUSED':
