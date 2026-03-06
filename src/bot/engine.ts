@@ -874,10 +874,34 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       return;
     }
 
-    // Multi-turn KO: dismiss text and attack again
-    console.log('[Bot] Still in battle, attacking again');
+    // Multi-turn KO: dismiss text and re-check before attacking
+    console.log('[Bot] Still in battle, dismissing text before retry');
     await pressButtonN('B', TEXT_DISMISS_COUNT);
     await delay(MENU_READINESS_WAIT);
+
+    // Re-check: the battle may have ended during text dismissal
+    await memory.refresh();
+    const retryOutcome = getBattleOutcome(memory);
+    const retryState = readGameState(memory);
+    if (retryOutcome === BATTLE_OUTCOME_WON || retryState.screen.type === 'overworld') {
+      console.log('[Bot] Battle won (detected on retry), dismissing post-battle text');
+      await pressButtonN('B', 3);
+      await delay(POST_BATTLE_TEXT_WAIT);
+      await pressButtonN('B', 2);
+      await delay(POST_BATTLE_CHECK_WAIT);
+
+      await memory.refresh();
+      const postState = readGameState(memory);
+      if (postState.screen.type === 'overworld') {
+        await handleTrainingBattleWon();
+      } else {
+        pauseReason = 'Level-up event detected — handle evolution/move prompt, then call window.resumeTraining()';
+        console.log(`[Bot] ${pauseReason}`);
+        setStatus('PAUSED');
+      }
+      return;
+    }
+
     await executeKoerAttack();
   }
 

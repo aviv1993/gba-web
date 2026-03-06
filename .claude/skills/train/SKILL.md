@@ -156,4 +156,4 @@ If the user wants to stop:
 - **Switch mode**: trainee earns half EXP (Gen 3 switch-training mechanic). **Direct mode**: trainee earns full EXP.
 - If the active Pokemon runs out of PP or faints, the bot will ERROR. The user needs to heal at a Pokemon Center.
 - Memory addresses are for Pokemon Ruby/Sapphire. Other games may not work.
-- The player must already be standing on or near grass.
+- The player must be in an area with random encounters (grass, caves, water).
