@@ -118,18 +118,31 @@ Poll the bot state every 10-15 seconds:
 
 ### When status is PAUSED
 
-The bot pauses for two reasons:
+The bot pauses for three reasons:
 
 1. **KO'er HP low**: The KO'er's HP dropped below 20%. Tell the user to heal and then resume.
-2. **Level-up event**: An evolution or move-learn prompt is blocking. Tell the user to handle it manually (accept/decline evolution, choose move), then resume.
+2. **Trainee HP low** (direct mode): The trainee's HP dropped below 20%. Tell the user to heal and then resume.
+3. **Level-up detected**: A party member leveled up. A move-learn or evolution prompt may be on screen.
 
-After the user handles the prompt:
+#### Handling level-up pauses automatically
+
+When `pauseReason` contains "Level-up detected", take a screenshot to check the game screen:
+
+```js
+// browser_take_screenshot
+```
+
+- **If the screenshot shows the overworld** (no text box or prompt visible): No move-learn prompt appeared. Resume training immediately.
+- **If the screenshot shows a move-learn prompt** ("Delete a move to make room for X?" or similar): Tell the user which move is being offered and wait for their input on whether to learn it.
+- **If the screenshot shows an evolution screen**: Tell the user and wait for their input.
+
+After handling (or if no prompt exists):
 ```js
 // browser_evaluate
 () => { window.resumeTraining(); return "Training resumed"; }
 ```
 
-**Before calling resumeTraining**, verify the user has returned to the overworld. If they haven't, tell them to finish handling the prompt first.
+**Before calling resumeTraining**, verify the game is on the overworld (no blocking prompts). If there's a prompt, tell the user to handle it first.
 
 ## Completion
 
