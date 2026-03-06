@@ -511,7 +511,14 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
 
     await pressButton('A'); // Select Fight
 
-    // Navigate to correct move slot (0-3)
+    // Reset cursor to slot 0 (top-left) before navigating.
+    // The move menu uses clamped navigation — redundant presses stop at the boundary —
+    // so Up×2 + Left×2 reliably resets to slot 0 regardless of where the cursor was.
+    // This is needed because the cursor remembers the last selected move between battles.
+    await pressButtonN('Up', 2);
+    await pressButtonN('Left', 2);
+
+    // Navigate to correct move slot (0-3) from slot 0
     // Moves are in a 2x2 grid: [0,1] / [2,3]
     if (moveIndex === 1) {
       await pressButton('Right');
