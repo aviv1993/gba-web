@@ -752,24 +752,14 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
 
     pauseReason = null;
 
-    // Auto-heal if the relevant Pokemon needs it (may have taken damage in the battle that triggered the pause)
+    // Auto-heal party members that need it before resuming
     if (trainingState) {
-      const relevantSlot = trainingState.direct ? 0 : 1;
-      const relevantMon = party.find(p => p.slot === relevantSlot);
-      if (relevantMon) {
-        const hasStatus = relevantMon.status !== 'none';
-        const lowHp = relevantMon.hp / relevantMon.maxHp < KOER_HP_THRESHOLD;
-        const isFainted = relevantMon.hp === 0;
-
-        if (hasStatus || lowHp || isFainted) {
-          const healed = await healFromBag(relevantSlot, lowHp || isFainted, relevantMon.status);
-          if (!healed && (lowHp || isFainted)) {
-            pauseReason = `${trainingState.direct ? 'Trainee' : "KO'er"} needs healing (HP: ${relevantMon.hp}/${relevantMon.maxHp}, status: ${relevantMon.status}) — no items available`;
-            console.log(`[Bot] ${pauseReason}`);
-            setStatus('PAUSED');
-            return;
-          }
-        }
+      const healResult = await healPartyIfNeeded(party);
+      if (healResult) {
+        pauseReason = healResult;
+        console.log(`[Bot] ${pauseReason}`);
+        setStatus('PAUSED');
+        return;
       }
     }
 
@@ -1055,6 +1045,37 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     await executeKoerAttack();
   }
 
+  /** Heal all party members that need it (trainee and KO'er).
+   *  Returns null on success, or a pause reason string if healing failed and training can't continue. */
+  async function healPartyIfNeeded(party: { slot: number; hp: number; maxHp: number; status: string }[]): Promise<string | null> {
+    if (!trainingState) return null;
+
+    // In switch mode, heal both trainee (slot 0) and KO'er (slot 1).
+    // In direct mode, only the trainee (slot 0) matters.
+    const slotsToHeal = trainingState.direct ? [0] : [0, 1];
+
+    for (const slot of slotsToHeal) {
+      const mon = party.find(p => p.slot === slot);
+      if (!mon) continue;
+
+      const hasStatus = mon.status !== 'none';
+      const lowHp = mon.hp / mon.maxHp < KOER_HP_THRESHOLD;
+      const isFainted = mon.hp === 0;
+
+      if (hasStatus || lowHp || isFainted) {
+        const healed = await healFromBag(slot, lowHp || isFainted, mon.status);
+        if (!healed && (lowHp || isFainted)) {
+          const label = slot === 0 ? 'Trainee' : "KO'er";
+          return `${label} needs healing (HP: ${mon.hp}/${mon.maxHp}, status: ${mon.status}) — no items available`;
+        }
+        // Re-read party after healing (items may have shifted, HP changed)
+        await memory.refresh();
+      }
+    }
+
+    return null;
+  }
+
   /** Use an item from the Items pocket on a specific party Pokemon via the overworld Start menu.
    *  Must only be called on the overworld. Returns true on success. */
   async function healFromBag(pokemonSlot: number, needHp: boolean, status: string): Promise<boolean> {
@@ -1175,27 +1196,13 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       return;
     }
 
-    // Auto-heal the relevant Pokemon if needed (status or low HP)
-    const relevantSlot = trainingState.direct ? 0 : 1;
-    const relevantMon = party.find(p => p.slot === relevantSlot);
-    if (relevantMon) {
-      const hasStatus = relevantMon.status !== 'none';
-      const lowHp = relevantMon.hp / relevantMon.maxHp < KOER_HP_THRESHOLD;
-      const isFainted = relevantMon.hp === 0;
-
-      if (hasStatus || lowHp || isFainted) {
-        const healed = await healFromBag(
-          relevantSlot,
-          lowHp || isFainted,
-          relevantMon.status,
-        );
-        if (!healed && (lowHp || isFainted)) {
-          pauseReason = `${trainingState.direct ? 'Trainee' : "KO'er"} needs healing (HP: ${relevantMon.hp}/${relevantMon.maxHp}, status: ${relevantMon.status}) — no items available`;
-          console.log(`[Bot] ${pauseReason}`);
-          setStatus('PAUSED');
-          return;
-        }
-      }
+    // Auto-heal party members that need it before resuming
+    const healResult = await healPartyIfNeeded(party);
+    if (healResult) {
+      pauseReason = healResult;
+      console.log(`[Bot] ${pauseReason}`);
+      setStatus('PAUSED');
+      return;
     }
 
     resumeWalking();
