@@ -105,6 +105,8 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
   let pauseReason: string | null = null;
   /** Party levels before the current attack, used to detect level-ups. */
   let preBattleLevels: number[] = [];
+  /** Party slots that have been tried as KO'er and failed (out of PP). */
+  let failedKoerSlots: Set<number> = new Set();
 
   function getState(): BotState {
     const battleState = (status === 'WAITING_FOR_DECISION' || status === 'EXECUTING_ACTION')
@@ -177,6 +179,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     pendingAction = null;
     lastBattleFingerprint = null;
     pauseReason = null;
+    failedKoerSlots = new Set();
 
     const ok = await memory.init();
     if (!ok) {
@@ -748,6 +751,28 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     }
 
     pauseReason = null;
+
+    // Auto-heal if the relevant Pokemon needs it (may have taken damage in the battle that triggered the pause)
+    if (trainingState) {
+      const relevantSlot = trainingState.direct ? 0 : 1;
+      const relevantMon = party.find(p => p.slot === relevantSlot);
+      if (relevantMon) {
+        const hasStatus = relevantMon.status !== 'none';
+        const lowHp = relevantMon.hp / relevantMon.maxHp < KOER_HP_THRESHOLD;
+        const isFainted = relevantMon.hp === 0;
+
+        if (hasStatus || lowHp || isFainted) {
+          const healed = await healFromBag(relevantSlot, lowHp || isFainted, relevantMon.status);
+          if (!healed && (lowHp || isFainted)) {
+            pauseReason = `${trainingState.direct ? 'Trainee' : "KO'er"} needs healing (HP: ${relevantMon.hp}/${relevantMon.maxHp}, status: ${relevantMon.status}) — no items available`;
+            console.log(`[Bot] ${pauseReason}`);
+            setStatus('PAUSED');
+            return;
+          }
+        }
+      }
+    }
+
     resumeWalking();
   }
 
@@ -813,7 +838,18 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     const enemyTypes = readEnemyTypes(memory);
     const bestIdx = selectBestMove(player.moves, enemyTypes);
     if (bestIdx < 0) {
-      error = 'KO\'er has no usable moves (all out of PP, status-only, or immune)';
+      // Current KO'er has no usable moves — try switching to an alternative
+      const currentSlot = findActivePartySlot(player);
+      if (currentSlot >= 0) failedKoerSlots.add(currentSlot);
+      const altSlot = findAlternativeKoer();
+      if (altSlot >= 0) {
+        console.log(`[Bot] KO'er out of PP — switching to alternative in slot ${altSlot}`);
+        await executeBattleSwitch(altSlot);
+        waitCounter = SWITCH_ANIM_WAIT;
+        setStatus('SWITCHING');
+        return;
+      }
+      error = 'KO\'er has no usable moves and no alternative KO\'er available';
       setStatus('ERROR');
       stop();
       return;
@@ -842,6 +878,53 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       }
     }
     return bestIdx;
+  }
+
+  /** Find which party slot matches the currently active battle Pokemon. */
+  function findActivePartySlot(player: { hp: number; maxHp: number; level: number }): number {
+    const party = readParty(memory);
+    // Match by HP + maxHP + level — not perfect but good enough for slot identification
+    const match = party.find(p => p.hp === player.hp && p.maxHp === player.maxHp && p.level === player.level && p.slot !== 0);
+    return match ? match.slot : -1;
+  }
+
+  /** Find a non-trainee, non-fainted party member to use as KO'er, skipping failed slots. */
+  function findAlternativeKoer(): number {
+    const party = readParty(memory);
+    let bestSlot = -1;
+    let bestLevel = -1;
+    for (const mon of party) {
+      if (mon.slot === 0) continue; // skip trainee
+      if (mon.hp === 0) continue; // skip fainted
+      if (failedKoerSlots.has(mon.slot)) continue; // skip already-tried
+      if (mon.level > bestLevel) {
+        bestLevel = mon.level;
+        bestSlot = mon.slot;
+      }
+    }
+    return bestSlot;
+  }
+
+  /** Switch to a specific party slot during battle. */
+  async function executeBattleSwitch(targetSlot: number) {
+    await pressButtonN('B', TEXT_DISMISS_COUNT);
+    await delay(MENU_READINESS_WAIT);
+
+    // Battle menu → POKEMON (bottom-left)
+    await pressButtonN('Down', 3);
+    await pressButtonN('Left', 3);
+    await pressButton('A');
+    await delay(PARTY_SCREEN_WAIT);
+
+    // Party screen: cursor starts at slot 0 (left big box)
+    // Right to enter right column (slot 1), then Down to reach target slot
+    await pressButton('Right');
+    for (let i = 1; i < targetSlot; i++) {
+      await pressButton('Down');
+    }
+    await pressButton('A'); // Select
+    await delay(SWITCH_CONFIRM_WAIT);
+    await pressButton('A'); // Confirm "SHIFT"
   }
 
   /**
@@ -1075,6 +1158,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     if (!trainingState) return;
 
     trainingState.battlesWon++;
+    failedKoerSlots.clear();
 
     const party = readParty(memory);
     const trainee = party.find(p => p.slot === 0);
