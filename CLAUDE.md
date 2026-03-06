@@ -102,6 +102,13 @@ Key addresses (in `src/bot/game-data.ts`, from [pret/pokeruby](https://github.co
 
 ### Button Input Timing
 
+**External input injection (from Playwright/browser automation):** The emulator object is not exposed on `window`. The keyboard hook (`use-keyboard.ts`) listens on `window` for `keydown`/`keyup` events, but Playwright's `page.keyboard.press()` does NOT reliably reach these listeners. Instead, dispatch events directly on `window`:
+```js
+window.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true }));
+setTimeout(() => window.dispatchEvent(new KeyboardEvent('keyup', { key: 'x', bubbles: true })), 80);
+```
+Key mappings: `x`=A, `z`=B, `ArrowUp/Down/Left/Right`=D-pad, `Enter`=Start, `Backspace`=Select, `a`=L, `s`=R. On-screen touch buttons also don't respond to Playwright `.click()` (they use touch events).
+
 The bot injects inputs via `emulator.buttonPress()`/`buttonUnpress()` with careful timing:
 - **B for text advancement**: During battle intro, press B (not A) to advance text boxes. B advances text identically to A but does NOT select menu items, preventing accidental FIGHT selection if the battle menu appears mid-press.
 - **Menu readiness gap**: gBattleMons data is populated in memory during battle init, **before the UI transition completes**. The bot must wait for the menu to be visually interactive before sending navigation inputs. `executeRun()` presses B three times to dismiss any lingering text, then waits 2500ms for the menu animation, before pressing Down×3+Right×3+A (redundant presses ensure cursor reaches RUN even if a press is dropped). Total time from battle detection to navigation ≈ 5000ms (2000ms BATTLE_ENTER_MIN + 540ms B×3 + 2500ms wait), which safely clears the RS battle intro (~4–5s at 1x).
