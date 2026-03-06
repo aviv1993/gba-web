@@ -90,6 +90,8 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
   let trainingState: TrainingState | null = null;
   /** Reason for PAUSED status. */
   let pauseReason: string | null = null;
+  /** Party levels before the current attack, used to detect level-ups. */
+  let preBattleLevels: number[] = [];
 
   function getState(): BotState {
     const battleState = (status === 'WAITING_FOR_DECISION' || status === 'EXECUTING_ACTION')
@@ -796,6 +798,12 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       return;
     }
 
+    // Record all party levels before attack to detect level-ups afterward
+    if (trainingState) {
+      const party = readParty(memory);
+      preBattleLevels = party.map(p => p.level);
+    }
+
     console.log(`[Bot] Attacking with ${player.moves[bestIdx].name} (power ${player.moves[bestIdx].power})`);
     await executeMoveAction(bestIdx);
     waitCounter = ATTACK_ANIM_WAIT;
@@ -813,6 +821,40 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       }
     }
     return bestIdx;
+  }
+
+  /**
+   * Check if any party member leveled up since the attack started.
+   * If so, pause to let the user handle any move-learn/evolution prompts.
+   * The move-learn prompt runs as an overworld script overlay (callback2 === CB2_OVERWORLD),
+   * so readScreen() can't distinguish it from a clean overworld — we must catch it here
+   * before B presses dismiss it.
+   * Returns true if the bot was paused or stopped (caller should return).
+   */
+  function checkLevelUpAndPause(): boolean {
+    if (!trainingState || preBattleLevels.length === 0) return false;
+
+    const party = readParty(memory);
+    const leveledUp = party.find((p, i) => i < preBattleLevels.length && p.level > preBattleLevels[i]);
+    if (!leveledUp) return false;
+
+    const oldLevel = preBattleLevels[party.indexOf(leveledUp)];
+    const trainee = party.find(p => p.slot === 0);
+    if (trainee) trainingState.currentLevel = trainee.level;
+    trainingState.battlesWon++;
+    console.log(`[Bot] Level-up detected: slot ${leveledUp.slot} (${oldLevel} → ${leveledUp.level}) — pausing for user`);
+
+    if (trainingState.targetLevel && trainee && trainee.level >= trainingState.targetLevel) {
+      console.log(`[Bot] Target level ${trainingState.targetLevel} reached!`);
+      setStatus('DONE');
+      stop();
+      return true;
+    }
+
+    pauseReason = `Level-up detected (slot ${leveledUp.slot}: Lv.${oldLevel} → Lv.${leveledUp.level}) — handle any move/evolution prompts, then call window.resumeTraining()`;
+    console.log(`[Bot] ${pauseReason}`);
+    setStatus('PAUSED');
+    return true;
   }
 
   async function tickAttacking() {
@@ -843,7 +885,9 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     }
 
     if (outcome === BATTLE_OUTCOME_WON || gameState.screen.type === 'overworld') {
-      // Battle won — dismiss post-battle text carefully
+      if (checkLevelUpAndPause()) return;
+
+      // No level-up — dismiss post-battle text normally
       console.log('[Bot] Battle won, dismissing post-battle text');
       await pressButtonN('B', 3);
       await delay(POST_BATTLE_TEXT_WAIT);
@@ -884,6 +928,8 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     const retryOutcome = getBattleOutcome(memory);
     const retryState = readGameState(memory);
     if (retryOutcome === BATTLE_OUTCOME_WON || retryState.screen.type === 'overworld') {
+      if (checkLevelUpAndPause()) return;
+
       console.log('[Bot] Battle won (detected on retry), dismissing post-battle text');
       await pressButtonN('B', 3);
       await delay(POST_BATTLE_TEXT_WAIT);
