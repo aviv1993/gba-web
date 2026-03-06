@@ -114,7 +114,7 @@ Poll the bot state every 10-15 seconds:
 - **BATTLE_ENTERING** / **SWITCHING** / **ATTACKING**: Bot is handling a battle autonomously. Wait and check again.
 - **PAUSED**: Bot needs user intervention. Read `pauseReason` and inform the user.
 - **DONE**: Target level reached. Report success.
-- **ERROR**: Something went wrong. Read `error` and report.
+- **ERROR**: Something went wrong. Read `error` and handle (see below).
 
 ### When status is PAUSED
 
@@ -144,6 +144,23 @@ After handling (or if no prompt exists):
 
 **Before calling resumeTraining**, verify the game is on the overworld (no blocking prompts). If there's a prompt, tell the user to handle it first.
 
+### When status is ERROR
+
+Read `window.botState.error`. If the error is about PP depletion ("no usable moves", "out of PP") **and** the bot was in direct mode:
+
+1. The trainee is stuck in battle with no moves. The user must manually run from this battle.
+2. Tell the user: "Trainee ran out of PP. Run from this battle, then I'll restart in switch mode using the KO'er."
+3. Wait for the user to confirm they've escaped, or poll with screenshots until the overworld is visible.
+4. Restart training in **switch mode** with the same target level:
+```js
+() => { window.startTraining({ targetLevel: <same_target>, direct: false }); return "Training restarted (switch)"; }
+```
+5. Inform the user: "Switched to switch training — KO'er (slot 1) will fight. Trainee still gets half EXP."
+
+If the error is about PP depletion but the bot was already in switch mode (KO'er also out of PP), tell the user both Pokemon are out of PP and they need to visit a Pokemon Center.
+
+For any other error (fainted, can't read data, etc.), report it to the user and stop.
+
 ## Completion
 
 When `window.botState.status === "DONE"`:
@@ -167,6 +184,6 @@ If the user wants to stop:
 - The bot runs at 4x speed during walking and battles.
 - The bot is fully autonomous — do NOT inject battle actions (`window.botAction`). The bot handles switching and attacking on its own.
 - **Switch mode**: trainee earns half EXP (Gen 3 switch-training mechanic). **Direct mode**: trainee earns full EXP.
-- If the active Pokemon runs out of PP or faints, the bot will ERROR. The user needs to heal at a Pokemon Center.
+- If the active Pokemon runs out of PP, the bot will ERROR. In direct mode, handle this by restarting in switch mode (see ERROR handling above). If both Pokemon are out of PP, the user needs to visit a Pokemon Center.
 - Memory addresses are for Pokemon Ruby/Sapphire. Other games may not work.
 - The player must be in an area with random encounters (grass, caves, water).
