@@ -777,8 +777,8 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     await executeKoerAttack();
   }
 
-  async function executeKoerAttack(skipRefresh = false) {
-    if (!skipRefresh) await memory.refresh();
+  async function executeKoerAttack() {
+    await memory.refresh();
     const player = readPlayerPokemon(memory, true);
     if (!player) {
       error = 'Cannot read active Pokemon data';
@@ -878,7 +878,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     console.log('[Bot] Still in battle, attacking again');
     await pressButtonN('B', TEXT_DISMISS_COUNT);
     await delay(MENU_READINESS_WAIT);
-    await executeKoerAttack(true); // memory already refreshed this tick
+    await executeKoerAttack();
   }
 
   async function handleTrainingBattleWon() {
