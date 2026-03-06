@@ -10,12 +10,15 @@ import {
   getBallSlotIndex,
   readEnemyTypes,
   isMoveImmune,
+  getHpHealSlotIndex,
+  getStatusHealSlotIndex,
   BATTLE_OUTCOME_CAUGHT,
   BATTLE_OUTCOME_WON,
   BATTLE_OUTCOME_LOST,
   ADDR_PARTY_COUNT,
   ADDR_CURRENT_BAG_POCKET,
   BAG_POCKET_BALLS,
+  BAG_POCKET_ITEMS,
   BAG_POCKET_COUNT,
 } from './game-data.ts';
 import { readGameState, readParty } from './game-state.ts';
@@ -62,6 +65,16 @@ const ATTACK_ANIM_WAIT = 60;
 const POST_BATTLE_TEXT_WAIT = 1500;
 /** Ms to wait after post-battle text for level-up/evolution check */
 const POST_BATTLE_CHECK_WAIT = 2000;
+/** Ms to wait for start menu to open */
+const START_MENU_WAIT = 500;
+/** Ms to wait for item use animation + HP bar fill */
+const ITEM_USE_ANIM_WAIT = 1000;
+/** Ms to wait for item context menu */
+const ITEM_CONTEXT_WAIT = 300;
+/** Number of Up presses to reset start menu cursor (menu is clamped, max 7 items) */
+const START_MENU_RESET_UPS = 6;
+/** Start menu index for BAG option */
+const START_MENU_BAG_INDEX = 2;
 
 export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: number) => void) {
   const memory = new MemoryReader(emulator);
@@ -532,18 +545,18 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     await pressButton('A'); // Select the move
   }
 
-  /** Navigate to the Poke Balls pocket from whatever pocket the bag is currently on.
+  /** Navigate to a bag pocket from whatever pocket the bag is currently on.
    *  Caller must have called memory.refresh() before invoking this. */
-  async function navigateToBagPocketBalls() {
+  async function navigateToBagPocket(targetPocket: number) {
     const currentPocket = memory.readU8(ADDR_CURRENT_BAG_POCKET);
-    if (currentPocket === BAG_POCKET_BALLS) return;
+    if (currentPocket === targetPocket) return;
 
     // Circular navigation: compute shortest path (Left or Right)
-    const rightSteps = (BAG_POCKET_BALLS - currentPocket + BAG_POCKET_COUNT) % BAG_POCKET_COUNT;
-    const leftSteps = (currentPocket - BAG_POCKET_BALLS + BAG_POCKET_COUNT) % BAG_POCKET_COUNT;
+    const rightSteps = (targetPocket - currentPocket + BAG_POCKET_COUNT) % BAG_POCKET_COUNT;
+    const leftSteps = (currentPocket - targetPocket + BAG_POCKET_COUNT) % BAG_POCKET_COUNT;
     const dir = rightSteps <= leftSteps ? 'Right' : 'Left';
     const steps = Math.min(rightSteps, leftSteps);
-    console.log(`[Bot] Bag pocket ${currentPocket} → ${BAG_POCKET_BALLS}: ${dir} × ${steps}`);
+    console.log(`[Bot] Bag pocket ${currentPocket} → ${targetPocket}: ${dir} × ${steps}`);
     for (let i = 0; i < steps; i++) {
       await pressButton(dir);
       await delay(BAG_NAV_WAIT);
@@ -581,7 +594,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     await pressButton('A');
 
     await delay(BAG_OPEN_WAIT);
-    await navigateToBagPocketBalls();
+    await navigateToBagPocket(BAG_POCKET_BALLS);
 
     // Reset cursor to top of pocket list
     await pressButtonN('Up', 10);
@@ -697,6 +710,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       currentLevel: trainee.level,
       targetLevel: options.targetLevel ?? null,
       battlesWon: 0,
+      heals: 0,
     };
 
     console.log(`[Bot] Training started (${direct ? 'direct' : 'switch'}): Lv.${trainee.level}${options.targetLevel ? ` → Lv.${options.targetLevel}` : ''}`);
@@ -958,6 +972,105 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     await executeKoerAttack();
   }
 
+  /** Use an item from the Items pocket on a specific party Pokemon via the overworld Start menu.
+   *  Must only be called on the overworld. Returns true on success. */
+  async function healFromBag(pokemonSlot: number, needHp: boolean, status: string): Promise<boolean> {
+    await memory.refresh();
+
+    const party = readParty(memory);
+    const mon = party.find(p => p.slot === pokemonSlot);
+    if (!mon) return false;
+    const deficit = mon.maxHp - mon.hp;
+    const isFainted = mon.hp === 0;
+
+    // Pre-check: do we have the items we need before opening menus?
+    let statusSlotIdx = -1;
+    let hpSlotIdx = -1;
+
+    if (status !== 'none') {
+      statusSlotIdx = getStatusHealSlotIndex(memory, status);
+      if (statusSlotIdx < 0 && !needHp) return false;
+    }
+    if (needHp && deficit > 0) {
+      hpSlotIdx = getHpHealSlotIndex(memory, deficit, isFainted);
+      if (hpSlotIdx < 0 && statusSlotIdx < 0) return false;
+    }
+
+    console.log(`[Bot] Healing slot ${pokemonSlot} from bag (hp: ${needHp}, deficit: ${deficit}, status: ${status})`);
+
+    // Open Start menu
+    await pressButton('Start');
+    await delay(START_MENU_WAIT);
+
+    // Navigate to BAG: reset cursor to top (clamped menu), then Down to BAG index
+    await pressButtonN('Up', START_MENU_RESET_UPS);
+    await pressButtonN('Down', START_MENU_BAG_INDEX);
+    await pressButton('A');
+    await delay(BAG_OPEN_WAIT);
+
+    // Navigate to Items pocket (pocket 0)
+    await memory.refresh();
+    await navigateToBagPocket(BAG_POCKET_ITEMS);
+
+    // Use status heal first (if needed)
+    if (statusSlotIdx >= 0) {
+      await applyItemOnPokemon(statusSlotIdx, pokemonSlot);
+      // Full Restore heals both HP and status — re-check if HP heal still needed
+      if (needHp) {
+        await memory.refresh();
+        const updatedMon = readParty(memory).find(p => p.slot === pokemonSlot);
+        if (updatedMon && updatedMon.hp / updatedMon.maxHp >= 0.8) needHp = false;
+      }
+    }
+
+    // Use HP heal (if still needed)
+    if (needHp && deficit > 0) {
+      // Re-find slot index (items shift when consumed, deficit may have changed)
+      await memory.refresh();
+      const updatedMon = readParty(memory).find(p => p.slot === pokemonSlot);
+      const newDeficit = updatedMon ? updatedMon.maxHp - updatedMon.hp : deficit;
+      const newFainted = updatedMon ? updatedMon.hp === 0 : isFainted;
+      if (newDeficit > 0) {
+        hpSlotIdx = getHpHealSlotIndex(memory, newDeficit, newFainted);
+        if (hpSlotIdx >= 0) {
+          await applyItemOnPokemon(hpSlotIdx, pokemonSlot);
+        }
+      }
+    }
+
+    // Close bag + menus — press B×5 to return to overworld
+    await pressButtonN('B', 5);
+    await delay(START_MENU_WAIT);
+
+    if (trainingState) trainingState.heals++;
+    console.log(`[Bot] Healing complete (total heals: ${trainingState?.heals})`);
+    return true;
+  }
+
+  async function applyItemOnPokemon(itemSlotIdx: number, pokemonSlot: number) {
+    // Reset item list cursor to top (clamped — handles any starting position)
+    await pressButtonN('Up', 10);
+    // Navigate down to target item slot
+    for (let i = 0; i < itemSlotIdx; i++) {
+      await pressButton('Down');
+    }
+    // Select item
+    await pressButton('A');
+    await delay(ITEM_CONTEXT_WAIT);
+    // Select "Use" (first option in context menu)
+    await pressButton('A');
+    await delay(PARTY_SCREEN_WAIT);
+    // Navigate to target Pokemon slot (party screen from "Use" opens at slot 0)
+    for (let i = 0; i < pokemonSlot; i++) {
+      await pressButton('Down');
+    }
+    await pressButton('A');
+    await delay(ITEM_USE_ANIM_WAIT);
+    // Dismiss "HP was restored!" / "was cured!" text
+    await pressButtonN('B', 3);
+    await delay(START_MENU_WAIT);
+  }
+
   async function handleTrainingBattleWon() {
     if (!trainingState) return;
 
@@ -976,6 +1089,29 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
       setStatus('DONE');
       stop();
       return;
+    }
+
+    // Auto-heal the relevant Pokemon if needed (status or low HP)
+    const relevantSlot = trainingState.direct ? 0 : 1;
+    const relevantMon = party.find(p => p.slot === relevantSlot);
+    if (relevantMon) {
+      const hasStatus = relevantMon.status !== 'none';
+      const lowHp = relevantMon.hp / relevantMon.maxHp < KOER_HP_THRESHOLD;
+      const isFainted = relevantMon.hp === 0;
+
+      if (hasStatus || lowHp || isFainted) {
+        const healed = await healFromBag(
+          relevantSlot,
+          lowHp || isFainted,
+          relevantMon.status,
+        );
+        if (!healed && (lowHp || isFainted)) {
+          pauseReason = `${trainingState.direct ? 'Trainee' : "KO'er"} needs healing (HP: ${relevantMon.hp}/${relevantMon.maxHp}, status: ${relevantMon.status}) — no items available`;
+          console.log(`[Bot] ${pauseReason}`);
+          setStatus('PAUSED');
+          return;
+        }
+      }
     }
 
     resumeWalking();
