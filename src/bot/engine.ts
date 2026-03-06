@@ -799,18 +799,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     const enemyTypes = readEnemyTypes(memory);
     const bestIdx = selectBestMove(player.moves, enemyTypes);
     if (bestIdx < 0) {
-      // In direct training, fall back to KO'er (slot 1) if trainee is out of PP
-      if (trainingState?.direct) {
-        const party = readParty(memory);
-        const koer = party.find(p => p.slot === 1);
-        if (koer && koer.hp > 0) {
-          console.log('[Bot] Trainee out of PP — switching to KO\'er (slot 1)');
-          setStatus('SWITCHING');
-          await executeSwitch();
-          return;
-        }
-      }
-      error = 'No usable moves (all out of PP, status-only, or immune)';
+      error = 'KO\'er has no usable moves (all out of PP, status-only, or immune)';
       setStatus('ERROR');
       stop();
       return;
