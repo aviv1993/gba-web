@@ -77,9 +77,9 @@ mGBA runs its emulation loop in a pthread (Web Worker with `SharedArrayBuffer`).
 
 Key constants (in `src/bot/memory.ts`):
 - **EWRAM base address**: `0x02000000` (256KB region)
-- **EWRAM offset within save state**: `0x21000` — state layout is header+CPU+IO+video (~0x21000 bytes), then EWRAM (0x40000), then IWRAM (0x8000). Total decompressed state = 397,312 bytes (0x61000).
+- **Save state layout**: header+CPU+IO+video (0x19000), then IWRAM (0x8000), then EWRAM (0x40000). Total decompressed state = 397,312 bytes (0x61000). IWRAM offset = `0x19000`, EWRAM offset = `0x21000`.
 
-The `MemoryReader.refresh()` method must be called before each batch of reads to get fresh data. Each refresh takes a save state, reads the PNG from the emulator's virtual filesystem, parses PNG chunks to find `gbAs`, decompresses via `DecompressionStream('deflate')`, and caches the EWRAM slice.
+The `MemoryReader.refresh()` method must be called before each batch of reads to get fresh data. Each refresh takes a save state, reads the PNG from the emulator's virtual filesystem, parses PNG chunks to find `gbAs`, decompresses via `DecompressionStream('deflate')`, and caches both the EWRAM and IWRAM slices.
 
 ### Game State Detection
 
@@ -89,10 +89,15 @@ The `MemoryReader.refresh()` method must be called before each batch of reads to
 - **Fix**: `getBattleFingerprint()` hashes enemy species+level+HP+maxHP+move1+playerHP. A fingerprint *change* indicates a new battle started. On bot start, an initial fingerprint is recorded; during walking, the bot compares current fingerprint against the last known one.
 - **Battle exit** uses screen-state detection — after pressing RUN, `tickRunning` checks `readGameState().screen.type` every 5 ticks (500ms). On `'overworld'`, the fingerprint is recorded and walking resumes. If still `'battle'` after `RUN_WAIT` ticks (4s), re-navigate Down×3+Right×3+A without the full menu wait, up to `RUN_MAX_RETRIES` times every `RUN_RETRY_INTERVAL` (2s). This handles the Gen 3 "Can't escape!" mechanic — the first escape attempt may fail based on speed stat comparison, but subsequent attempts succeed as the game's `escape_attempts` counter increments.
 
+**All memory addresses are for the EU ROM** ("2006 - Pokemon Ruby (E)(Independent)"). Some addresses differ from the US ROM (notably `gSaveBlock1`). Always validate against the EU ROM when adding new addresses.
+
 Key addresses (in `src/bot/game-data.ts`, from [pret/pokeruby](https://github.com/pret/pokeruby)):
-- `gBattleMons`: `0x02024A80` — array of `BattlePokemon` structs (0x58 bytes each). Index 0 = player, index 1 = enemy.
-- `gBattleOutcome`: `0x02024D26` — u8, values: 1=won, 2=lost, 4=ran, 7=caught
-- `gSaveBlock1`: `0x02023A60` — bag data lives here; balls pocket at offset 0x600
+- `gBattleMons`: `0x02024A80` (EWRAM) — array of `BattlePokemon` structs (0x58 bytes each). Index 0 = player, index 1 = enemy.
+- `gBattleOutcome`: `0x02024D26` (EWRAM) — u8, values: 1=won, 2=lost, 4=ran, 7=caught
+- `gSaveBlock1`: `0x02025734` (EWRAM, EU ROM) — bag data lives here; balls pocket at offset 0x600. US ROM uses `0x02023A60`.
+- `gPlayerPartyCount`: `0x03004350` (IWRAM) — u8, same in US and EU ROMs
+- `gPlayerParty`: `0x03004360` (IWRAM) — Pokemon[6] (100 bytes each), same in US and EU ROMs
+- `gMain.callback2`: `0x03001774` (IWRAM) — function pointer for current screen handler
 - Species IDs are Gen 3 internal format — use `internalToNational()` from `pokemon-db.ts` (+25 offset for standard species)
 
 ### Button Input Timing

@@ -30,13 +30,32 @@ The user must arrange their party before starting:
 () => typeof window.startTraining === 'function'
 ```
 
-3. Check the current location:
+3. Try to load saved game from slot 1 (continue if it fails):
 ```js
 // browser_evaluate
-() => window.getLocation().then(loc => JSON.stringify(loc))
+() => { const ok = window.loadSaveState(1); return ok ? "Save state 1 loaded" : "No save in slot 1, continuing with current state"; }
 ```
 
-This returns `{ "mapName": "ROUTE 101", "x": 5, "y": 10 }`. Use the map name to advise the user whether this is a good training spot for their target level. Wild Pokemon levels vary by route in Ruby/Sapphire:
+If loaded, wait 2 seconds for the game to stabilize before proceeding.
+
+4. Check the current location and party (must be sequential — both use the same memory reader):
+```js
+// browser_evaluate
+() => window.getLocation().then(loc => window.getParty().then(party => JSON.stringify({ location: loc, party })))
+```
+
+This returns:
+```json
+{
+  "location": { "mapName": "ROUTE 116", "x": 30, "y": 13 },
+  "party": [
+    { "slot": 0, "level": 8, "hp": 28, "maxHp": 28, "status": "none" },
+    { "slot": 1, "level": 35, "hp": 102, "maxHp": 102, "status": "none" }
+  ]
+}
+```
+
+Slot 0 is the trainee, slot 1 is the KO'er. Use both to advise the user. Wild Pokemon levels by route in Ruby/Sapphire:
 
 | Route / Area | Wild Levels |
 |---|---|
@@ -53,9 +72,9 @@ This returns `{ "mapName": "ROUTE 101", "x": 5, "y": 10 }`. Use the map name to 
 | Route 120 | 25-27 |
 | Route 121 | 26-28 |
 
-If the wild levels are much higher than the trainee's current level, warn the user — the trainee could get KO'd before switching. If wild levels are very low relative to the KO'er, training will work but give minimal EXP. Recommend a route where wilds are close to or slightly above the trainee's level for optimal EXP gain.
+**Recommendation logic**: Compare the trainee's level (slot 0) to the route's wild levels. Wilds close to or slightly above the trainee's level give the best EXP. If wilds are much higher than the trainee, warn the user — the trainee could get KO'd before switching. If wilds are far below the trainee, EXP will be minimal. Also check the KO'er (slot 1) is healthy (HP not low) and high enough level to one-shot wilds on this route.
 
-4. Start the training bot:
+5. Start the training bot:
 ```js
 // browser_evaluate
 () => { window.startTraining({ targetLevel: $ARGUMENTS || undefined }); return "Training started"; }

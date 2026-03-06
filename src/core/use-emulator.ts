@@ -3,14 +3,6 @@ import type { mGBAEmulator } from '@thenick775/mgba-wasm';
 
 export type { mGBAEmulator };
 
-function deleteDB(name: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.deleteDatabase(name);
-    req.onsuccess = () => resolve();
-    req.onerror = () => reject(req.error);
-  });
-}
-
 export function useEmulator(canvas: HTMLCanvasElement | null) {
   const [emulator, setEmulator] = useState<mGBAEmulator | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -19,6 +11,7 @@ export function useEmulator(canvas: HTMLCanvasElement | null) {
     if (!canvas) return;
 
     let cancelled = false;
+    let cleanupFns: (() => void)[] = [];
 
     const initialize = async () => {
       try {
@@ -30,19 +23,21 @@ export function useEmulator(canvas: HTMLCanvasElement | null) {
         const version = Module.version.projectName + ' ' + Module.version.projectVersion;
         console.log('mGBA initialized:', version);
 
-        // Wipe Emscripten IDBFS stores before FSInit so mGBA doesn't
-        // restore stale saves from IndexedDB — cloud is the source of truth.
-        await Promise.all([
-          deleteDB('/data'),
-          deleteDB('/autosave'),
-        ]);
-
         await Module.FSInit();
 
         // Disable mGBA's built-in keyboard handling — we manage input ourselves
         Module.toggleInput(false);
 
         if (!cancelled) {
+          // Periodically sync SRAM to IndexedDB so in-game saves persist across page loads
+          const syncInterval = setInterval(() => Module.FSSync(), 30_000);
+          const onVisChange = () => { if (document.hidden) Module.FSSync(); };
+          document.addEventListener('visibilitychange', onVisChange);
+          cleanupFns.push(
+            () => clearInterval(syncInterval),
+            () => document.removeEventListener('visibilitychange', onVisChange),
+          );
+
           setEmulator(Module);
         }
       } catch (err) {
@@ -57,6 +52,7 @@ export function useEmulator(canvas: HTMLCanvasElement | null) {
 
     return () => {
       cancelled = true;
+      cleanupFns.forEach(fn => fn());
     };
   }, [canvas]);
 

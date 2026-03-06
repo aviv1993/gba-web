@@ -40,8 +40,11 @@ export const ADDR_SAVE_BLOCK_1 = 0x02025734;
 // SaveBlock1 field offsets
 export const SB1_POS = 0x00;              // Coords16: s16 x, s16 y
 export const SB1_LOCATION = 0x04;         // WarpData: s8 mapGroup, s8 mapNum, s8 warpId, s16 x, s16 y
-export const SB1_PARTY_COUNT = 0x234;     // u8 — number of Pokemon in party (0-6)
-export const SB1_PARTY = 0x238;           // Pokemon[6] — 100 bytes each
+// Party data is NOT inside SaveBlock1 — it's in standalone IWRAM globals.
+// gPlayerPartyCount: 0x03004350, gPlayerParty: 0x03004360 (from pret/pokeruby symbol map).
+// Same address in both US and EU ROMs (IWRAM layout is identical).
+export const ADDR_PARTY_COUNT = 0x03004350;  // u8 — number of Pokemon in party (0-6)
+export const ADDR_PARTY = 0x03004360;        // Pokemon[6] — 100 bytes each
 export const SB1_MONEY = 0x490;           // u32
 // Bag pockets (ItemSlot = u16 itemId + u16 quantity = 4 bytes each)
 export const SB1_BAG_ITEMS = 0x560;       // 20 slots

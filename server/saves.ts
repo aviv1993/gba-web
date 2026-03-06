@@ -52,8 +52,8 @@ savesRouter.get('/:game/:slot', (req, res) => {
   res.sendFile(filePath);
 });
 
-// Upload a save
-savesRouter.put('/:game/:slot', (req, res) => {
+// Upload a save (PUT for normal requests, POST for sendBeacon)
+function handleUpload(req: import('express').Request, res: import('express').Response) {
   const { game, slot } = req.params;
   const gameDir = path.join(SAVES_DIR, game);
   fs.mkdirSync(gameDir, { recursive: true });
@@ -66,4 +66,7 @@ savesRouter.put('/:game/:slot', (req, res) => {
     fs.writeFileSync(filePath, Buffer.concat(chunks));
     res.json({ ok: true });
   });
-});
+}
+
+savesRouter.put('/:game/:slot', handleUpload);
+savesRouter.post('/:game/:slot', handleUpload);

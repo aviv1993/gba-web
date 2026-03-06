@@ -11,8 +11,7 @@ import {
   BATTLE_OUTCOME_CAUGHT,
   BATTLE_OUTCOME_WON,
   BATTLE_OUTCOME_LOST,
-  ADDR_SAVE_BLOCK_1,
-  SB1_PARTY_COUNT,
+  ADDR_PARTY_COUNT,
   ADDR_CURRENT_BAG_POCKET,
   BAG_POCKET_BALLS,
   BAG_POCKET_COUNT,
@@ -419,7 +418,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
   /** Check if the Pokemon was caught (via battle outcome or party count increase). */
   function checkCaught(): { caught: boolean; outcome: number; partyGrew: boolean } {
     const outcome = getBattleOutcome(memory);
-    const currentPartyCount = memory.readU8(ADDR_SAVE_BLOCK_1 + SB1_PARTY_COUNT);
+    const currentPartyCount = memory.readU8(ADDR_PARTY_COUNT);
     const partyGrew = partyCountBeforeThrow > 0 && currentPartyCount > partyCountBeforeThrow;
     return { caught: outcome === BATTLE_OUTCOME_CAUGHT || partyGrew, outcome, partyGrew };
   }
@@ -525,7 +524,7 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
 
     // Refresh memory to find ball position and record party count for catch detection
     await memory.refresh();
-    partyCountBeforeThrow = memory.readU8(ADDR_SAVE_BLOCK_1 + SB1_PARTY_COUNT);
+    partyCountBeforeThrow = memory.readU8(ADDR_PARTY_COUNT);
     const slotIndex = getBallSlotIndex(memory, ballType);
     if (slotIndex < 0) {
       error = `No ${ballType} found in bag`;
@@ -907,5 +906,13 @@ export function createBotEngine(emulator: Emulator, setSpeedMultiplier: (speed: 
     return { mapName: gameState.location.mapName, x: gameState.location.x, y: gameState.location.y };
   }
 
-  return { start, startTraining, resumeTraining, stop, setAction, getState, getLocation, destroy };
+  async function getParty(): Promise<{ slot: number; level: number; hp: number; maxHp: number; status: string }[] | null> {
+    const ok = await memory.init();
+    if (!ok) return null;
+    await memory.refresh();
+    return readParty(memory);
+  }
+
+
+  return { start, startTraining, resumeTraining, stop, setAction, getState, getLocation, getParty, destroy };
 }

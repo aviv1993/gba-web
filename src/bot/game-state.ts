@@ -5,8 +5,8 @@ import {
   ADDR_GMAIN_CALLBACK2,
   SB1_POS,
   SB1_LOCATION,
-  SB1_PARTY_COUNT,
-  SB1_PARTY,
+  ADDR_PARTY_COUNT,
+  ADDR_PARTY,
   SB1_MONEY,
   SB1_BAG_ITEMS,
   SB1_BAG_KEY_ITEMS,
@@ -80,9 +80,8 @@ function readLocation(mem: MemoryReader): Location {
 }
 
 export function readParty(mem: MemoryReader): PartyOverview[] {
-  const sb1 = ADDR_SAVE_BLOCK_1;
-  const count = mem.readU8(sb1 + SB1_PARTY_COUNT);
-  const partyBase = sb1 + SB1_PARTY;
+  const count = mem.readU8(ADDR_PARTY_COUNT);
+  const partyBase = ADDR_PARTY;
   const party: PartyOverview[] = [];
 
   for (let i = 0; i < Math.min(count, 6); i++) {

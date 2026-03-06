@@ -57,6 +57,8 @@ export function useBot() {
       eng.resumeTraining();
     };
     w.getLocation = () => eng.getLocation();
+    w.getParty = () => eng.getParty();
+    w.loadSaveState = (slot: number) => emulator.loadState(slot);
 
     return () => {
       eng.destroy();
@@ -68,6 +70,8 @@ export function useBot() {
       delete w.startTraining;
       delete w.resumeTraining;
       delete w.getLocation;
+      delete w.getParty;
+      delete w.loadSaveState;
     };
   }, [emulator, romLoaded, setSpeed]);
 
