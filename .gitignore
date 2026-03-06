@@ -31,3 +31,4 @@ saves/
 
 # Playwright MCP
 .playwright-mcp/
+*.png
