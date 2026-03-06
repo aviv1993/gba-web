@@ -94,6 +94,23 @@ export const ITEM_GREATBALL = 3;
 export const ITEM_ULTRABALL = 2;
 export const ITEM_MASTERBALL = 1;
 
+// Healing item IDs (Gen 3 internal)
+export const ITEM_POTION = 13;
+export const ITEM_SUPER_POTION = 14;
+export const ITEM_HYPER_POTION = 15;
+export const ITEM_MAX_POTION = 16;
+export const ITEM_FULL_RESTORE = 17;
+export const ITEM_FULL_HEAL = 18;
+export const ITEM_REVIVE = 19;
+export const ITEM_ANTIDOTE = 48;
+export const ITEM_BURN_HEAL = 49;
+export const ITEM_ICE_HEAL = 50;
+export const ITEM_AWAKENING = 51;
+export const ITEM_PARALYZE_HEAL = 54;
+
+// Bag pocket index for Items
+export const BAG_POCKET_ITEMS = 0;
+
 // gBattleOutcome
 const ADDR_BATTLE_OUTCOME = 0x02024D26;
 
@@ -351,6 +368,74 @@ export function getBallSlotIndex(mem: MemoryReader, ballType: string): number {
     if (itemId === 0) break; // end of pocket
     if (itemId === targetItemId) return i;
   }
+  return -1;
+}
+
+/** Find the 0-based display index of an item in the Items pocket. Returns -1 if not found. */
+export function getItemSlotIndex(mem: MemoryReader, targetItemId: number): number {
+  for (let i = 0; i < BAG_ITEMS_SIZE; i++) {
+    const addr = ADDR_SAVE_BLOCK_1 + SB1_BAG_ITEMS + i * 4;
+    const itemId = mem.readU16(addr);
+    if (itemId === 0) break;
+    if (itemId === targetItemId) return i;
+  }
+  return -1;
+}
+
+// Healing amounts per item
+const HEAL_AMOUNTS: Record<number, number> = {
+  [ITEM_POTION]: 20,
+  [ITEM_SUPER_POTION]: 50,
+  [ITEM_HYPER_POTION]: 200,
+  [ITEM_MAX_POTION]: 9999,
+  [ITEM_FULL_RESTORE]: 9999,
+  [ITEM_REVIVE]: 0, // special: revive only
+};
+
+/** Find cheapest HP heal item in bag. Falls back to largest available if nothing covers full deficit. */
+export function getHpHealSlotIndex(mem: MemoryReader, deficit: number, isFainted: boolean): number {
+  // If fainted, try Revive first
+  if (isFainted) {
+    const idx = getItemSlotIndex(mem, ITEM_REVIVE);
+    if (idx >= 0) return idx;
+    // Full Restore doesn't work on fainted Pokemon in Gen 3
+    return -1;
+  }
+
+  const cheapestFirst = [ITEM_POTION, ITEM_SUPER_POTION, ITEM_HYPER_POTION, ITEM_MAX_POTION, ITEM_FULL_RESTORE];
+  // Find cheapest that covers full deficit
+  for (const itemId of cheapestFirst) {
+    if (HEAL_AMOUNTS[itemId] >= deficit) {
+      const idx = getItemSlotIndex(mem, itemId);
+      if (idx >= 0) return idx;
+    }
+  }
+  // No single item covers deficit — use the biggest available
+  for (let i = cheapestFirst.length - 1; i >= 0; i--) {
+    const idx = getItemSlotIndex(mem, cheapestFirst[i]);
+    if (idx >= 0) return idx;
+  }
+  return -1;
+}
+
+/** Find status heal item in bag. Tries specific cure first, then Full Heal, then Full Restore. */
+export function getStatusHealSlotIndex(mem: MemoryReader, status: string): number {
+  const specific: Record<string, number> = {
+    paralysis: ITEM_PARALYZE_HEAL,
+    poison: ITEM_ANTIDOTE,
+    toxic: ITEM_ANTIDOTE,
+    burn: ITEM_BURN_HEAL,
+    freeze: ITEM_ICE_HEAL,
+    sleep: ITEM_AWAKENING,
+  };
+  if (specific[status]) {
+    const idx = getItemSlotIndex(mem, specific[status]);
+    if (idx >= 0) return idx;
+  }
+  let idx = getItemSlotIndex(mem, ITEM_FULL_HEAL);
+  if (idx >= 0) return idx;
+  idx = getItemSlotIndex(mem, ITEM_FULL_RESTORE);
+  if (idx >= 0) return idx;
   return -1;
 }
 

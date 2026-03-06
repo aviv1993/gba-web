@@ -21,6 +21,7 @@ export interface TrainingState {
   currentLevel: number;
   targetLevel: number | null;
   battlesWon: number;
+  heals: number;
 }
 
 export interface WildPokemon {
