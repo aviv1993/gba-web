@@ -150,7 +150,7 @@ Read `window.botState.error`. If the error is about PP depletion ("no usable mov
 
 1. The trainee is stuck in battle with no moves. The user must manually run from this battle.
 2. Tell the user: "Trainee ran out of PP. Run from this battle, then I'll restart in switch mode using the KO'er."
-3. Wait for the user to confirm they've escaped, or poll with screenshots until the overworld is visible.
+3. Wait for the user to confirm they've escaped.
 4. Restart training in **switch mode** with the same target level:
 ```js
 () => { window.startTraining({ targetLevel: <same_target>, direct: false }); return "Training restarted (switch)"; }
